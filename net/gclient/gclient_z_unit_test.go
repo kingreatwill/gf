@@ -11,7 +11,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -38,6 +38,9 @@ func Test_Client_Basic(t *testing.T) {
 	s.BindHandler("/hello", func(r *ghttp.Request) {
 		r.Response.Write("hello")
 	})
+	s.BindHandler("/postForm", func(r *ghttp.Request) {
+		r.Response.Write(r.Get("key1"))
+	})
 	s.SetDumpRouterMap(false)
 	s.Start()
 	defer s.Shutdown()
@@ -54,8 +57,12 @@ func Test_Client_Basic(t *testing.T) {
 		_, err := g.Client().Post(ctx, "")
 		t.AssertNE(err, nil)
 
-		_, err = g.Client().PostForm("", nil)
+		_, err = g.Client().PostForm(ctx, "/postForm", nil)
 		t.AssertNE(err, nil)
+		data, _ := g.Client().PostForm(ctx, url+"/postForm", map[string]string{
+			"key1": "value1",
+		})
+		t.Assert(data.ReadAllString(), "value1")
 	})
 }
 
@@ -367,7 +374,7 @@ func Test_Client_Middleware(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			resp.Response.Body = ioutil.NopCloser(bytes.NewBufferString(str2))
+			resp.Response.Body = io.NopCloser(bytes.NewBufferString(str2))
 			str1 += "f"
 			return
 		})
@@ -626,5 +633,55 @@ func TestClient_SetBodyContent(t *testing.T) {
 		t.Assert(res.ReadAllString(), "hello")
 		res.SetBodyContent([]byte("world"))
 		t.Assert(res.ReadAllString(), "world")
+	})
+}
+
+func TestClient_SetNoUrlEncode(t *testing.T) {
+	s := g.Server(guid.S())
+	s.BindHandler("/", func(r *ghttp.Request) {
+		r.Response.Write(r.URL.RawQuery)
+	})
+	s.SetDumpRouterMap(false)
+	s.Start()
+	defer s.Shutdown()
+
+	time.Sleep(100 * time.Millisecond)
+	gtest.C(t, func(t *gtest.T) {
+		c := g.Client()
+		c.SetPrefix(fmt.Sprintf("http://127.0.0.1:%d", s.GetListenedPort()))
+
+		var params = g.Map{
+			"path": "/data/binlog",
+		}
+		t.Assert(c.GetContent(ctx, `/`, params), `path=%2Fdata%2Fbinlog`)
+
+		c.SetNoUrlEncode(true)
+		t.Assert(c.GetContent(ctx, `/`, params), `path=/data/binlog`)
+
+		c.SetNoUrlEncode(false)
+		t.Assert(c.GetContent(ctx, `/`, params), `path=%2Fdata%2Fbinlog`)
+	})
+}
+
+func TestClient_NoUrlEncode(t *testing.T) {
+	s := g.Server(guid.S())
+	s.BindHandler("/", func(r *ghttp.Request) {
+		r.Response.Write(r.URL.RawQuery)
+	})
+	s.SetDumpRouterMap(false)
+	s.Start()
+	defer s.Shutdown()
+
+	time.Sleep(100 * time.Millisecond)
+	gtest.C(t, func(t *gtest.T) {
+		c := g.Client()
+		c.SetPrefix(fmt.Sprintf("http://127.0.0.1:%d", s.GetListenedPort()))
+
+		var params = g.Map{
+			"path": "/data/binlog",
+		}
+		t.Assert(c.GetContent(ctx, `/`, params), `path=%2Fdata%2Fbinlog`)
+
+		t.Assert(c.NoUrlEncode().GetContent(ctx, `/`, params), `path=/data/binlog`)
 	})
 }

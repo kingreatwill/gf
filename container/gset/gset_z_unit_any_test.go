@@ -82,6 +82,23 @@ func TestSet_Basic(t *testing.T) {
 	})
 }
 
+func TestSet_Iterator_Deadlock(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		set := gset.NewFrom([]interface{}{1, 2, 3, 4, 5}, true)
+		set.Iterator(func(k interface{}) bool {
+			if gconv.Int(k)%2 == 0 {
+				set.Remove(k)
+			}
+			return true
+		})
+		t.Assert(set.Contains(1), true)
+		t.Assert(set.Contains(2), false)
+		t.Assert(set.Contains(3), true)
+		t.Assert(set.Contains(4), false)
+		t.Assert(set.Contains(5), true)
+	})
+}
+
 func TestSet_Iterator(t *testing.T) {
 	gtest.C(t, func(t *gtest.T) {
 		s := gset.NewSet()
@@ -114,8 +131,8 @@ func TestSet_LockFunc(t *testing.T) {
 		t.Assert(s.Size(), 2)
 		s.RLockFunc(func(m map[interface{}]struct{}) {
 			t.Assert(m, map[interface{}]struct{}{
-				3: struct{}{},
-				2: struct{}{},
+				3: {},
+				2: {},
 			})
 		})
 	})

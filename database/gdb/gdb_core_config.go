@@ -30,7 +30,7 @@ type ConfigNode struct {
 	User                 string        `json:"user"`                 // Authentication username.
 	Pass                 string        `json:"pass"`                 // Authentication password.
 	Name                 string        `json:"name"`                 // Default used database name.
-	Type                 string        `json:"type"`                 // Database type: mysql, sqlite, mssql, pgsql, oracle.
+	Type                 string        `json:"type"`                 // Database type: mysql, mariadb, sqlite, mssql, pgsql, oracle, clickhouse, dm.
 	Link                 string        `json:"link"`                 // (Optional) Custom link information for all configuration in one single string.
 	Extra                string        `json:"extra"`                // (Optional) Extra configuration according the registered third-party database driver.
 	Role                 string        `json:"role"`                 // (Optional, "master" in default) Node role, used for master-slave mode: master, slave.
@@ -38,10 +38,10 @@ type ConfigNode struct {
 	Prefix               string        `json:"prefix"`               // (Optional) Table prefix.
 	DryRun               bool          `json:"dryRun"`               // (Optional) Dry run, which does SELECT but no INSERT/UPDATE/DELETE statements.
 	Weight               int           `json:"weight"`               // (Optional) Weight for load balance calculating, it's useless if there's just one node.
-	Charset              string        `json:"charset"`              // (Optional, "utf8mb4" in default) Custom charset when operating on database.
+	Charset              string        `json:"charset"`              // (Optional, "utf8" in default) Custom charset when operating on database.
 	Protocol             string        `json:"protocol"`             // (Optional, "tcp" in default) See net.Dial for more information which networks are available.
 	Timezone             string        `json:"timezone"`             // (Optional) Sets the time zone for displaying and interpreting time stamps.
-	Namespace            string        `json:"namespace"`            // Namespace for some databases. Eg, in pgsql, the `Name` acts as the `catalog`, the `NameSpace` acts as the `schema`.
+	Namespace            string        `json:"namespace"`            // (Optional) Namespace for some databases. Eg, in pgsql, the `Name` acts as the `catalog`, the `NameSpace` acts as the `schema`.
 	MaxIdleConnCount     int           `json:"maxIdle"`              // (Optional) Max idle connection configuration for underlying connection pool.
 	MaxOpenConnCount     int           `json:"maxOpen"`              // (Optional) Max open connection configuration for underlying connection pool.
 	MaxConnLifeTime      time.Duration `json:"maxLifeTime"`          // (Optional) Max amount of time a connection may be idle before being closed.
@@ -49,9 +49,9 @@ type ConfigNode struct {
 	ExecTimeout          time.Duration `json:"execTimeout"`          // (Optional) Max exec time for dml.
 	TranTimeout          time.Duration `json:"tranTimeout"`          // (Optional) Max exec time for a transaction.
 	PrepareTimeout       time.Duration `json:"prepareTimeout"`       // (Optional) Max exec time for prepare operation.
-	CreatedAt            string        `json:"createdAt"`            // (Optional) The filed name of table for automatic-filled created datetime.
-	UpdatedAt            string        `json:"updatedAt"`            // (Optional) The filed name of table for automatic-filled updated datetime.
-	DeletedAt            string        `json:"deletedAt"`            // (Optional) The filed name of table for automatic-filled updated datetime.
+	CreatedAt            string        `json:"createdAt"`            // (Optional) The field name of table for automatic-filled created datetime.
+	UpdatedAt            string        `json:"updatedAt"`            // (Optional) The field name of table for automatic-filled updated datetime.
+	DeletedAt            string        `json:"deletedAt"`            // (Optional) The field name of table for automatic-filled updated datetime.
 	TimeMaintainDisabled bool          `json:"timeMaintainDisabled"` // (Optional) Disable the automatic time maintaining feature.
 }
 
@@ -208,15 +208,15 @@ func (c *Core) SetMaxConnLifeTime(d time.Duration) {
 
 // GetConfig returns the current used node configuration.
 func (c *Core) GetConfig() *ConfigNode {
-	internalData := c.GetInternalCtxDataFromCtx(c.db.GetCtx())
-	if internalData != nil && internalData.ConfigNode != nil {
+	var configNode = c.getConfigNodeFromCtx(c.db.GetCtx())
+	if configNode != nil {
 		// Note:
 		// It so here checks and returns the config from current DB,
 		// if different schemas between current DB and config.Name from context,
 		// for example, in nested transaction scenario, the context is passed all through the logic procedure,
 		// but the config.Name from context may be still the original one from the first transaction object.
-		if c.config.Name == internalData.ConfigNode.Name {
-			return internalData.ConfigNode
+		if c.config.Name == configNode.Name {
+			return configNode
 		}
 	}
 	return c.config
@@ -276,14 +276,14 @@ func parseConfigNodeLink(node *ConfigNode) *ConfigNode {
 			node.Pass = match[3]
 			node.Protocol = match[4]
 			array := gstr.Split(match[5], ":")
-			if len(array) == 2 {
+			if len(array) == 2 && node.Protocol != "file" {
 				node.Host = array[0]
 				node.Port = array[1]
 				node.Name = match[6]
 			} else {
 				node.Name = match[5]
 			}
-			if len(match) > 6 {
+			if len(match) > 6 && match[7] != "" {
 				node.Extra = match[7]
 			}
 			node.Link = ""

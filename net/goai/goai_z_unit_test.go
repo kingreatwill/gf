@@ -12,11 +12,14 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/internal/json"
+	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/net/goai"
 	"github.com/gogf/gf/v2/test/gtest"
 	"github.com/gogf/gf/v2/util/gmeta"
+	"github.com/gogf/gf/v2/util/gtag"
 )
 
 func Test_Basic(t *testing.T) {
@@ -112,7 +115,11 @@ func TestOpenApiV3_Add(t *testing.T) {
 		// Schema asserts.
 		t.Assert(len(oai.Components.Schemas.Map()), 3)
 		t.Assert(oai.Components.Schemas.Get(`github.com.gogf.gf.v2.net.goai_test.CreateResourceReq`).Value.Type, goai.TypeObject)
-		t.Assert(len(oai.Components.Schemas.Get(`github.com.gogf.gf.v2.net.goai_test.CreateResourceReq`).Value.Properties.Map()), 5)
+
+		t.Assert(len(oai.Components.Schemas.Get(`github.com.gogf.gf.v2.net.goai_test.CreateResourceReq`).Value.Properties.Map()), 7)
+		t.Assert(len(oai.Paths["/test1/{appId}"].Put.RequestBody.Value.Content["application/json"].Schema.Value.Properties.Map()), 5)
+		t.Assert(len(oai.Paths["/test1/{appId}"].Post.RequestBody.Value.Content["application/json"].Schema.Value.Properties.Map()), 5)
+
 		t.Assert(oai.Paths["/test1/{appId}"].Post.Parameters[0].Value.Schema.Value.Type, goai.TypeInteger)
 		t.Assert(oai.Paths["/test1/{appId}"].Post.Parameters[1].Value.Schema.Value.Type, goai.TypeString)
 
@@ -460,6 +467,37 @@ func TestOpenApiV3_CommonRequest_SubDataField(t *testing.T) {
 	})
 }
 
+func TestOpenApiV3_CommonRequest_Files(t *testing.T) {
+	type Req struct {
+		g.Meta `path:"/upload" method:"POST" tags:"Upload" mime:"multipart/form-data" summary:"上传文件"`
+		Files  []*ghttp.UploadFile `json:"files" type:"file" dc:"选择上传文件"`
+		File   *ghttp.UploadFile   `json:"file" type:"file" dc:"选择上传文件"`
+	}
+	type Res struct {
+	}
+
+	f := func(ctx context.Context, req *Req) (res *Res, err error) {
+		return
+	}
+
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			err error
+			oai = goai.New()
+		)
+		err = oai.Add(goai.AddInput{
+			Path:   "/upload",
+			Method: http.MethodGet,
+			Object: f,
+		})
+		t.AssertNil(err)
+
+		// fmt.Println(oai.String())
+		t.Assert(oai.Components.Schemas.Get(`github.com.gogf.gf.v2.net.goai_test.Req`).Value.Properties.Get("files").Value.Type, goai.TypeArray)
+		t.Assert(oai.Components.Schemas.Get(`github.com.gogf.gf.v2.net.goai_test.Req`).Value.Properties.Get("file").Value.Type, goai.TypeFile)
+	})
+}
+
 func TestOpenApiV3_CommonResponse(t *testing.T) {
 	type CommonResponse struct {
 		Code    int         `json:"code"    description:"Error code"`
@@ -665,7 +703,7 @@ func TestOpenApiV3_ShortTags(t *testing.T) {
 	}
 	type CreateResourceReq struct {
 		CommonReq
-		gmeta.Meta `path:"/CreateResourceReq" method:"POST" tags:"default" sm:"CreateResourceReq sum"`
+		gmeta.Meta `path:"/CreateResourceReq" method:"POST" tags:"default" sm:"CreateResourceReq sum" dc:"CreateResourceReq des"`
 		Name       string                  `dc:"实例名称"`
 		Product    string                  `dc:"业务类型"`
 		Region     string                  `v:"required" dc:"区域"`
@@ -703,7 +741,10 @@ func TestOpenApiV3_ShortTags(t *testing.T) {
 		// fmt.Println(oai.String())
 		// Schema asserts.
 		t.Assert(len(oai.Components.Schemas.Map()), 3)
-		t.Assert(oai.Paths[`/test1/{appId}`].Summary, `CreateResourceReq sum`)
+		t.Assert(oai.Paths[`/test1/{appId}`].Summary, ``)
+		t.Assert(oai.Paths[`/test1/{appId}`].Description, ``)
+		t.Assert(oai.Paths[`/test1/{appId}`].Put.Summary, `CreateResourceReq sum`)
+		t.Assert(oai.Paths[`/test1/{appId}`].Put.Description, `CreateResourceReq des`)
 		t.Assert(oai.Paths[`/test1/{appId}`].Put.Parameters[1].Value.Schema.Value.Description, `资源Id`)
 		t.Assert(oai.Components.Schemas.Get(`github.com.gogf.gf.v2.net.goai_test.CreateResourceReq`).Value.Properties.Get(`Name`).Value.Description, `实例名称`)
 	})
@@ -998,7 +1039,7 @@ func Test_EmbeddedStructAttribute(t *testing.T) {
 
 		b, err := json.Marshal(oai)
 		t.AssertNil(err)
-		t.Assert(b, `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.CreateResourceReq":{"properties":{"Name":{"description":"This is name.","format":"string","properties":{},"type":"string"},"Embedded":{"properties":{"Age":{"description":"This is embedded age.","format":"uint","properties":{},"type":"integer"}},"type":"object"}},"type":"object"}}},"info":{"title":"","version":""},"paths":null}`)
+		t.Assert(b, `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.CreateResourceReq":{"properties":{"Name":{"description":"This is name.","format":"string","type":"string"},"Embedded":{"properties":{"Age":{"description":"This is embedded age.","format":"uint","type":"integer"}},"type":"object"}},"type":"object"}}},"info":{"title":"","version":""},"paths":null}`)
 	})
 }
 
@@ -1022,7 +1063,7 @@ func Test_NameFromJsonTag(t *testing.T) {
 
 		b, err := json.Marshal(oai)
 		t.AssertNil(err)
-		t.Assert(b, `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.CreateReq":{"properties":{"nick_name":{"format":"string","properties":{},"type":"string"}},"type":"object"}}},"info":{"title":"","version":""},"paths":null}`)
+		t.Assert(b, `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.CreateReq":{"properties":{"nick_name":{"format":"string","type":"string"}},"type":"object"}}},"info":{"title":"","version":""},"paths":null}`)
 	})
 	// GET
 	gtest.C(t, func(t *gtest.T) {
@@ -1043,7 +1084,7 @@ func Test_NameFromJsonTag(t *testing.T) {
 		b, err := json.Marshal(oai)
 		t.AssertNil(err)
 		fmt.Println(string(b))
-		t.Assert(b, `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.CreateReq":{"properties":{"nick_name":{"format":"string","properties":{},"type":"string"}},"type":"object"}}},"info":{"title":"","version":""},"paths":null}`)
+		t.Assert(b, `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.CreateReq":{"properties":{"nick_name":{"format":"string","type":"string"}},"type":"object"}}},"info":{"title":"","version":""},"paths":null}`)
 	})
 }
 
@@ -1097,5 +1138,88 @@ func TestOpenApiV3_PathSecurity(t *testing.T) {
 		t.Assert(oai.Components.SecuritySchemes["apiKey"].Value.Type, "apiKey")
 		t.Assert(len(oai.Paths), 1)
 		t.Assert(len(oai.Paths["/index"].Put.Responses["200"].Value.Content["application/json"].Schema.Value.Properties.Map()), 3)
+	})
+}
+
+func Test_EmptyJsonNameWithOmitEmpty(t *testing.T) {
+	type CreateResourceReq struct {
+		gmeta.Meta `path:"/CreateResourceReq" method:"POST" tags:"default"`
+		Name       string `description:"实例名称" json:",omitempty"`
+		Product    string `description:"业务类型" json:",omitempty"`
+	}
+
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			err error
+			oai = goai.New()
+			req = new(CreateResourceReq)
+		)
+		err = oai.Add(goai.AddInput{
+			Object: req,
+		})
+		t.AssertNil(err)
+		var reqKey = "github.com.gogf.gf.v2.net.goai_test.CreateResourceReq"
+		t.AssertNE(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Name"), nil)
+		t.AssertNE(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Product"), nil)
+		t.Assert(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("None"), nil)
+	})
+}
+
+func Test_Enums(t *testing.T) {
+	type Status string
+	const (
+		StatusA Status = "a"
+		StatusB Status = "b"
+	)
+	type Req struct {
+		gmeta.Meta `path:"/CreateResourceReq" method:"POST" tags:"default"`
+		Name       string    `dc:"实例名称" json:",omitempty"`
+		Status1    Status    `dc:"状态1" json:",omitempty"`
+		Status2    *Status   `dc:"状态2" json:",omitempty"`
+		Status3    []Status  `dc:"状态2" json:",omitempty"`
+		Status4    []*Status `dc:"状态2" json:",omitempty"`
+	}
+
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			err error
+			oai = goai.New()
+			req = new(Req)
+		)
+		err = gtag.SetGlobalEnums(gjson.MustEncodeString(g.Map{
+			"github.com/gogf/gf/v2/net/goai_test.Status": []interface{}{StatusA, StatusB},
+		}))
+		t.AssertNil(err)
+
+		err = oai.Add(goai.AddInput{
+			Object: req,
+		})
+		t.AssertNil(err)
+		var reqKey = "github.com.gogf.gf.v2.net.goai_test.Req"
+		t.AssertNE(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Name"), nil)
+		t.Assert(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Status1").Value.Enum, g.Slice{"a", "b"})
+		t.Assert(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Status2").Value.Enum, g.Slice{"a", "b"})
+		t.Assert(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Status3").Value.Items.Value.Enum, g.Slice{"a", "b"})
+		t.Assert(oai.Components.Schemas.Get(reqKey).Value.Properties.Get("Status4").Value.Items.Value.Enum, g.Slice{"a", "b"})
+	})
+}
+
+func Test_XExtension(t *testing.T) {
+	type GetListReq struct {
+		g.Meta `path:"/user" tags:"User" method:"get" x-group:"User/Info" summary:"Get user list with basic info."`
+		Page   int `dc:"Page number" d:"1" x-sort:"1"`
+		Size   int `dc:"Size for per page." d:"10" x-sort:"2"`
+	}
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			err error
+			oai = goai.New()
+			req = new(GetListReq)
+		)
+		err = oai.Add(goai.AddInput{
+			Object: req,
+		})
+		t.AssertNil(err)
+		t.Assert(oai.String(), `{"openapi":"3.0.0","components":{"schemas":{"github.com.gogf.gf.v2.net.goai_test.GetListReq":{"properties":{"Page":{"default":1,"description":"Page number","format":"int","type":"integer","x-sort":"1"},"Size":{"default":10,"description":"Size for per page.","format":"int","type":"integer","x-sort":"2"}},"type":"object","x-group":"User/Info"}}},"info":{"title":"","version":""},"paths":null}`)
 	})
 }

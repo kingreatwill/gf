@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gogf/gf/v2/encoding/gurl"
+	"github.com/gogf/gf/v2/internal/empty"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
 )
@@ -55,6 +56,10 @@ func BuildParams(params interface{}, noUrlEncode ...bool) (encodedParamStr strin
 	}
 	s := ""
 	for k, v := range m {
+		// Ignore nil attributes.
+		if empty.IsNil(v) {
+			continue
+		}
 		if len(encodedParamStr) > 0 {
 			encodedParamStr += "&"
 		}
@@ -77,7 +82,7 @@ func HeaderToMap(header http.Header) map[string]interface{} {
 	for k, v := range header {
 		if len(v) > 1 {
 			m[k] = v
-		} else {
+		} else if len(v) == 1 {
 			m[k] = v[0]
 		}
 	}

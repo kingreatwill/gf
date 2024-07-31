@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime"
 	"testing"
 	"time"
 
@@ -166,5 +167,22 @@ func Test_BuildParams(t *testing.T) {
 			// check equal
 			t.AssertEQ(params[k], vv)
 		}
+	})
+}
+
+func Test_ServerSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Log("skip windows")
+		return
+	}
+	s := g.Server(guid.S())
+	s.BindHandler("/", func(r *ghttp.Request) {
+		r.Response.Write("hello world")
+	})
+	gtest.Assert(s.Start(), nil)
+	g.Wait()
+	time.Sleep(100 * time.Millisecond)
+	gtest.C(t, func(t *gtest.T) {
+		t.AssertEQ(s.Shutdown(), nil)
 	})
 }

@@ -1,10 +1,12 @@
 package gdebug_test
 
 import (
+	"fmt"
+	"testing"
+
 	"github.com/gogf/gf/v2/debug/gdebug"
 	"github.com/gogf/gf/v2/test/gtest"
 	"github.com/gogf/gf/v2/text/gstr"
-	"testing"
 )
 
 func Test_CallerPackage(t *testing.T) {
@@ -33,6 +35,7 @@ func Test_CallerDirectory(t *testing.T) {
 
 func Test_CallerFileLine(t *testing.T) {
 	gtest.C(t, func(t *gtest.T) {
+		fmt.Println(gdebug.CallerFileLine())
 		t.Assert(gstr.Contains(gdebug.CallerFileLine(), "gtest_util.go:36"), true)
 	})
 }

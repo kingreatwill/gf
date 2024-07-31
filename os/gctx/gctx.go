@@ -44,6 +44,7 @@ func init() {
 		context.Background(),
 		propagation.MapCarrier(m),
 	)
+	initCtx = WithCtx(initCtx)
 }
 
 // New creates and returns a context which contains context id.
@@ -56,11 +57,9 @@ func WithCtx(ctx context.Context) context.Context {
 	if CtxId(ctx) != "" {
 		return ctx
 	}
-	if gtrace.IsUsingDefaultProvider() {
-		var span *gtrace.Span
-		ctx, span = gtrace.NewSpan(ctx, "gctx.WithCtx")
-		defer span.End()
-	}
+	var span *gtrace.Span
+	ctx, span = gtrace.NewSpan(ctx, "gctx.WithCtx")
+	defer span.End()
 	return ctx
 }
 

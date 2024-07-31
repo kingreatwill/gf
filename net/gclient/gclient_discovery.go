@@ -11,14 +11,12 @@ import (
 	"net/http"
 
 	"github.com/gogf/gf/v2/container/gmap"
+	"github.com/gogf/gf/v2/errors/gcode"
+	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/internal/intlog"
 	"github.com/gogf/gf/v2/net/gsel"
 	"github.com/gogf/gf/v2/net/gsvc"
-	"github.com/gogf/gf/v2/os/gctx"
-)
-
-const (
-	discoveryMiddlewareHandled gctx.StrKey = `MiddlewareClientDiscoveryHandled`
+	"github.com/gogf/gf/v2/text/gstr"
 )
 
 type discoveryNode struct {
@@ -36,30 +34,35 @@ func (n *discoveryNode) Address() string {
 	return n.address
 }
 
+// service prefix to its selector map cache.
 var clientSelectorMap = gmap.New(true)
 
 // internalMiddlewareDiscovery is a client middleware that enables service discovery feature for client.
 func internalMiddlewareDiscovery(c *Client, r *http.Request) (response *Response, err error) {
-	ctx := r.Context()
-	// Mark this request is handled by server tracing middleware,
-	// to avoid repeated handling by the same middleware.
-	if ctx.Value(discoveryMiddlewareHandled) != nil {
+	if c.discovery == nil && !isServiceName(r.URL.Host) {
 		return c.Next(r)
 	}
-	if gsvc.GetRegistry() == nil {
-		return c.Next(r)
-	}
-	var service gsvc.Service
-	service, err = gsvc.GetAndWatch(ctx, r.URL.Host, func(service gsvc.Service) {
+	var (
+		ctx     = r.Context()
+		service gsvc.Service
+	)
+	service, err = gsvc.GetAndWatchWithDiscovery(ctx, c.discovery, r.URL.Host, func(service gsvc.Service) {
 		intlog.Printf(ctx, `http client watching service "%s" changed`, service.GetPrefix())
 		if v := clientSelectorMap.Get(service.GetPrefix()); v != nil {
 			if err = updateSelectorNodesByService(ctx, v.(gsel.Selector), service); err != nil {
-				intlog.Errorf(context.Background(), `%+v`, err)
+				intlog.Errorf(ctx, `%+v`, err)
 			}
 		}
 	})
 	if err != nil {
-		return nil, err
+		if gerror.Code(err) == gcode.CodeNotFound {
+			intlog.Printf(
+				ctx,
+				`service discovery error with url "%s:%s":%s`,
+				r.Method, r.URL.String(), err.Error(),
+			)
+			return c.Next(r)
+		}
 	}
 	if service == nil {
 		return c.Next(r)
@@ -69,7 +72,7 @@ func internalMiddlewareDiscovery(c *Client, r *http.Request) (response *Response
 		selectorMapKey   = service.GetPrefix()
 		selectorMapValue = clientSelectorMap.GetOrSetFuncLock(selectorMapKey, func() interface{} {
 			intlog.Printf(ctx, `http client create selector for service "%s"`, selectorMapKey)
-			selector := gsel.GetBuilder().Build()
+			selector := c.builder.Build()
 			// Update selector nodes.
 			if err = updateSelectorNodesByService(ctx, selector, service); err != nil {
 				return nil
@@ -89,8 +92,8 @@ func internalMiddlewareDiscovery(c *Client, r *http.Request) (response *Response
 	if done != nil {
 		defer done(ctx, gsel.DoneInfo{})
 	}
-	r.URL.Host = node.Address()
 	r.Host = node.Address()
+	r.URL.Host = node.Address()
 	return c.Next(r)
 }
 
@@ -103,4 +106,12 @@ func updateSelectorNodesByService(ctx context.Context, selector gsel.Selector, s
 		})
 	}
 	return selector.Update(ctx, nodes)
+}
+
+// isServiceName checks and returns whether given input parameter is service name or not.
+// It checks by whether the parameter is address by containing port delimiter character ':'.
+//
+// It does not contain any port number if using service discovery.
+func isServiceName(serviceNameOrAddress string) bool {
+	return !gstr.Contains(serviceNameOrAddress, gsvc.EndpointHostPortDelimiter)
 }

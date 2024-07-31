@@ -30,6 +30,48 @@ func (m *Model) All(where ...interface{}) (Result, error) {
 	return m.doGetAll(ctx, false, where...)
 }
 
+// AllAndCount retrieves all records and the total count of records from the model.
+// If useFieldForCount is true, it will use the fields specified in the model for counting;
+// otherwise, it will use a constant value of 1 for counting.
+// It returns the result as a slice of records, the total count of records, and an error if any.
+// The where parameter is an optional list of conditions to use when retrieving records.
+//
+// Example:
+//
+//	var model Model
+//	var result Result
+//	var count int
+//	where := []interface{}{"name = ?", "John"}
+//	result, count, err := model.AllAndCount(true)
+//	if err != nil {
+//	    // Handle error.
+//	}
+//	fmt.Println(result, count)
+func (m *Model) AllAndCount(useFieldForCount bool) (result Result, totalCount int, err error) {
+	// Clone the model for counting
+	countModel := m.Clone()
+
+	// If useFieldForCount is false, set the fields to a constant value of 1 for counting
+	if !useFieldForCount {
+		countModel.fields = "1"
+	}
+
+	// Get the total count of records
+	totalCount, err = countModel.Count()
+	if err != nil {
+		return
+	}
+
+	// If the total count is 0, there are no records to retrieve, so return early
+	if totalCount == 0 {
+		return
+	}
+
+	// Retrieve all records
+	result, err = m.doGetAll(m.GetCtx(), false)
+	return
+}
+
 // Chunk iterates the query result with given `size` and `handler` function.
 func (m *Model) Chunk(size int, handler ChunkHandler) {
 	page := m.start
@@ -97,7 +139,22 @@ func (m *Model) Array(fieldsAndWhere ...interface{}) ([]Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	return all.Array(), nil
+	var (
+		field string
+		core  = m.db.GetCore()
+		ctx   = core.injectInternalColumn(m.GetCtx())
+	)
+	if len(all) > 0 {
+		if internalData := core.getInternalColumnFromCtx(ctx); internalData != nil {
+			field = internalData.FirstResultColumn
+		} else {
+			return nil, gerror.NewCode(
+				gcode.CodeInternalError,
+				`query array error: the internal context data is missing. there's internal issue should be fixed`,
+			)
+		}
+	}
+	return all.Array(field), nil
 }
 
 // Struct retrieves one record from table and converts it into given struct.
@@ -224,6 +281,56 @@ func (m *Model) Scan(pointer interface{}, where ...interface{}) error {
 	}
 }
 
+// ScanAndCount scans a single record or record array that matches the given conditions and counts the total number of records that match those conditions.
+// If useFieldForCount is true, it will use the fields specified in the model for counting;
+// The pointer parameter is a pointer to a struct that the scanned data will be stored in.
+// The pointerCount parameter is a pointer to an integer that will be set to the total number of records that match the given conditions.
+// The where parameter is an optional list of conditions to use when retrieving records.
+//
+// Example:
+//
+//	var count int
+//	user := new(User)
+//	err  := db.Model("user").Where("id", 1).ScanAndCount(user,&count,true)
+//	fmt.Println(user, count)
+//
+// Example Join:
+//
+//	type User struct {
+//		Id       int
+//		Passport string
+//		Name     string
+//		Age      int
+//	}
+//	var users []User
+//	var count int
+//	db.Model(table).As("u1").
+//		LeftJoin(tableName2, "u2", "u2.id=u1.id").
+//		Fields("u1.passport,u1.id,u2.name,u2.age").
+//		Where("u1.id<2").
+//		ScanAndCount(&users, &count, false)
+func (m *Model) ScanAndCount(pointer interface{}, totalCount *int, useFieldForCount bool) (err error) {
+	// support Fields with *, example: .Fields("a.*, b.name"). Count sql is select count(1) from xxx
+	countModel := m.Clone()
+	// If useFieldForCount is false, set the fields to a constant value of 1 for counting
+	if !useFieldForCount {
+		countModel.fields = "1"
+	}
+
+	// Get the total count of records
+	*totalCount, err = countModel.Count()
+	if err != nil {
+		return err
+	}
+
+	// If the total count is 0, there are no records to retrieve, so return early
+	if *totalCount == 0 {
+		return
+	}
+	err = m.Scan(pointer)
+	return
+}
+
 // ScanList converts `r` to struct slice which contains other complex struct attributes.
 // Note that the parameter `listPointer` should be type of *[]struct/*[]*struct.
 //
@@ -273,7 +380,10 @@ func (m *Model) ScanList(structSlicePointer interface{}, bindToAttrName string, 
 // and fieldsAndWhere[1:] is treated as where condition fields.
 // Also see Model.Fields and Model.Where functions.
 func (m *Model) Value(fieldsAndWhere ...interface{}) (Value, error) {
-	var ctx = m.GetCtx()
+	var (
+		core = m.db.GetCore()
+		ctx  = core.injectInternalColumn(m.GetCtx())
+	)
 	if len(fieldsAndWhere) > 0 {
 		if len(fieldsAndWhere) > 2 {
 			return m.Fields(gconv.String(fieldsAndWhere[0])).Where(fieldsAndWhere[1], fieldsAndWhere[2:]...).Value()
@@ -291,16 +401,16 @@ func (m *Model) Value(fieldsAndWhere ...interface{}) (Value, error) {
 		return nil, err
 	}
 	if len(all) > 0 {
-		if internalData := m.db.GetCore().GetInternalCtxDataFromCtx(ctx); internalData != nil {
-			record := all[0]
-			if v, ok := record[internalData.FirstResultColumn]; ok {
+		if internalData := core.getInternalColumnFromCtx(ctx); internalData != nil {
+			if v, ok := all[0][internalData.FirstResultColumn]; ok {
 				return v, nil
 			}
+		} else {
+			return nil, gerror.NewCode(
+				gcode.CodeInternalError,
+				`query value error: the internal context data is missing. there's internal issue should be fixed`,
+			)
 		}
-		return nil, gerror.NewCode(
-			gcode.CodeInternalError,
-			`query value error: the internal context data is missing. there's internal issue should be fixed`,
-		)
 	}
 	return nil, nil
 }
@@ -309,7 +419,10 @@ func (m *Model) Value(fieldsAndWhere ...interface{}) (Value, error) {
 // The optional parameter `where` is the same as the parameter of Model.Where function,
 // see Model.Where.
 func (m *Model) Count(where ...interface{}) (int, error) {
-	var ctx = m.GetCtx()
+	var (
+		core = m.db.GetCore()
+		ctx  = core.injectInternalColumn(m.GetCtx())
+	)
 	if len(where) > 0 {
 		return m.Where(where[0], where[1:]...).Count()
 	}
@@ -321,16 +434,16 @@ func (m *Model) Count(where ...interface{}) (int, error) {
 		return 0, err
 	}
 	if len(all) > 0 {
-		if internalData := m.db.GetCore().GetInternalCtxDataFromCtx(ctx); internalData != nil {
-			record := all[0]
-			if v, ok := record[internalData.FirstResultColumn]; ok {
+		if internalData := core.getInternalColumnFromCtx(ctx); internalData != nil {
+			if v, ok := all[0][internalData.FirstResultColumn]; ok {
 				return v.Int(), nil
 			}
+		} else {
+			return 0, gerror.NewCode(
+				gcode.CodeInternalError,
+				`query count error: the internal context data is missing. there's internal issue should be fixed`,
+			)
 		}
-		return 0, gerror.NewCode(
-			gcode.CodeInternalError,
-			`query count error: the internal context data is missing. there's internal issue should be fixed`,
-		)
 	}
 	return 0, nil
 }
@@ -497,7 +610,9 @@ func (m *Model) doGetAllBySql(ctx context.Context, queryType queryType, sql stri
 	return
 }
 
-func (m *Model) getFormattedSqlAndArgs(ctx context.Context, queryType queryType, limit1 bool) (sqlWithHolder string, holderArgs []interface{}) {
+func (m *Model) getFormattedSqlAndArgs(
+	ctx context.Context, queryType queryType, limit1 bool,
+) (sqlWithHolder string, holderArgs []interface{}) {
 	switch queryType {
 	case queryTypeCount:
 		queryFields := "COUNT(1)"
@@ -537,6 +652,14 @@ func (m *Model) getFormattedSqlAndArgs(ctx context.Context, queryType queryType,
 		)
 		return sqlWithHolder, conditionArgs
 	}
+}
+
+func (m *Model) getHolderAndArgsAsSubModel(ctx context.Context) (holder string, args []interface{}) {
+	holder, args = m.getFormattedSqlAndArgs(
+		ctx, queryTypeNormal, false,
+	)
+	args = m.mergeArguments(args)
+	return
 }
 
 func (m *Model) getAutoPrefix() string {
@@ -607,7 +730,9 @@ func (m *Model) getFieldsFiltered() string {
 // Note that this function does not change any attribute value of the `m`.
 //
 // The parameter `limit1` specifies whether limits querying only one record if m.limit is not set.
-func (m *Model) formatCondition(ctx context.Context, limit1 bool, isCountStatement bool) (conditionWhere string, conditionExtra string, conditionArgs []interface{}) {
+func (m *Model) formatCondition(
+	ctx context.Context, limit1 bool, isCountStatement bool,
+) (conditionWhere string, conditionExtra string, conditionArgs []interface{}) {
 	var autoPrefix = m.getAutoPrefix()
 	// GROUP BY.
 	if m.groupBy != "" {
@@ -615,7 +740,7 @@ func (m *Model) formatCondition(ctx context.Context, limit1 bool, isCountStateme
 	}
 	// WHERE
 	conditionWhere, conditionArgs = m.whereBuilder.Build()
-	softDeletingCondition := m.getConditionForSoftDeleting()
+	softDeletingCondition := m.softTimeMaintainer().GetWhereConditionForDelete(ctx)
 	if m.rawSql != "" && conditionWhere != "" {
 		if gstr.ContainsI(m.rawSql, " WHERE ") {
 			conditionWhere = " AND " + conditionWhere
@@ -653,8 +778,10 @@ func (m *Model) formatCondition(ctx context.Context, limit1 bool, isCountStateme
 		}
 	}
 	// ORDER BY.
-	if m.orderBy != "" {
-		conditionExtra += " ORDER BY " + m.orderBy
+	if !isCountStatement { // The count statement of sqlserver cannot contain the order by statement
+		if m.orderBy != "" {
+			conditionExtra += " ORDER BY " + m.orderBy
+		}
 	}
 	// LIMIT.
 	if !isCountStatement {

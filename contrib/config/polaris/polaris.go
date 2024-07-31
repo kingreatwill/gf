@@ -10,20 +10,16 @@ package polaris
 import (
 	"context"
 
+	"github.com/polarismesh/polaris-go"
+	"github.com/polarismesh/polaris-go/api"
+	"github.com/polarismesh/polaris-go/pkg/model"
+
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcfg"
 	"github.com/gogf/gf/v2/text/gstr"
-	"github.com/polarismesh/polaris-go"
-	"github.com/polarismesh/polaris-go/api"
-	"github.com/polarismesh/polaris-go/pkg/model"
 )
-
-// LogDir sets the log directory for polaris.
-func LogDir(dir string) error {
-	return api.SetLoggersDir(dir)
-}
 
 // Config is the configuration for polaris.
 type Config struct {
@@ -65,14 +61,14 @@ func New(ctx context.Context, config Config) (adapter gcfg.Adapter, err error) {
 	)
 
 	if configAPI, err = polaris.NewConfigAPIByFile(config.Path); err != nil {
-		err = gerror.Wrapf(err, "Polaris configuration initialization failed  with config: %+v", config)
+		err = gerror.Wrapf(err, "Polaris configuration initialization failed with config: %+v", config)
 		return
 	}
 	// set log dir
 	if gstr.Trim(config.LogDir) == "" {
 		config.LogDir = defaultLogDir
 	}
-	if err = LogDir(config.LogDir); err != nil {
+	if err = client.LogDir(config.LogDir); err != nil {
 		err = gerror.Wrap(err, "set polaris log dir failed")
 		return
 	}
@@ -83,6 +79,11 @@ func New(ctx context.Context, config Config) (adapter gcfg.Adapter, err error) {
 	}
 
 	return client, nil
+}
+
+// LogDir sets the log directory for polaris.
+func (c *Client) LogDir(dir string) error {
+	return api.SetLoggersDir(dir)
 }
 
 // Available checks and returns the backend configuration service is available.
@@ -103,7 +104,7 @@ func (c *Client) Available(ctx context.Context, resource ...string) (ok bool) {
 	return c.client.GetNamespace() == namespace
 }
 
-// Get retrieves and returns value by specified `pattern` in current resource.
+// Get retrieves and return value by specified `pattern` in current resource.
 // Pattern like:
 // "x.y.z" for map item.
 // "x.0.y" for slice item.
@@ -117,7 +118,7 @@ func (c *Client) Get(ctx context.Context, pattern string) (value interface{}, er
 }
 
 // Data retrieves and returns all configuration data in current resource as map.
-// Note that this function may lead lots of memory usage if configuration data is too large,
+// Note that this function may lead to lots of memory usage if configuration data are too large,
 // you can implement this function if necessary.
 func (c *Client) Data(ctx context.Context) (data map[string]interface{}, err error) {
 	if c.value.IsNil() {
@@ -157,15 +158,18 @@ func (c *Client) doWatch(ctx context.Context) (err error) {
 	if !c.config.Watch {
 		return nil
 	}
-	var changeChan = make(chan model.ConfigFileChangeEvent)
-	c.client.AddChangeListenerWithChannel(changeChan)
-	go func() {
-		for {
-			select {
-			case <-changeChan:
-				_ = c.doUpdate(ctx)
-			}
-		}
-	}()
+	go c.startAsynchronousWatch(
+		ctx,
+		c.client.AddChangeListenerWithChannel(),
+	)
 	return nil
+}
+
+func (c *Client) startAsynchronousWatch(ctx context.Context, changeChan <-chan model.ConfigFileChangeEvent) {
+	for {
+		select {
+		case <-changeChan:
+			_ = c.doUpdate(ctx)
+		}
+	}
 }

@@ -7,15 +7,19 @@
 package gconv
 
 import (
+	"context"
 	"reflect"
 	"time"
 
+	"github.com/gogf/gf/v2/internal/intlog"
+	"github.com/gogf/gf/v2/internal/json"
 	"github.com/gogf/gf/v2/os/gtime"
 )
 
 // Convert converts the variable `fromValue` to the type `toTypeName`, the type `toTypeName` is specified by string.
+//
 // The optional parameter `extraParams` is used for additional necessary parameter for this conversion.
-// It supports common types conversion as its conversion based on type name string.
+// It supports common basic types conversion as its conversion based on type name string.
 func Convert(fromValue interface{}, toTypeName string, extraParams ...interface{}) interface{} {
 	return doConvert(doConvertInput{
 		FromValue:  fromValue,
@@ -25,10 +29,29 @@ func Convert(fromValue interface{}, toTypeName string, extraParams ...interface{
 	})
 }
 
+// ConvertWithRefer converts the variable `fromValue` to the type referred by value `referValue`.
+//
+// The optional parameter `extraParams` is used for additional necessary parameter for this conversion.
+// It supports common basic types conversion as its conversion based on type name string.
+func ConvertWithRefer(fromValue interface{}, referValue interface{}, extraParams ...interface{}) interface{} {
+	var referValueRf reflect.Value
+	if v, ok := referValue.(reflect.Value); ok {
+		referValueRf = v
+	} else {
+		referValueRf = reflect.ValueOf(referValue)
+	}
+	return doConvert(doConvertInput{
+		FromValue:  fromValue,
+		ToTypeName: referValueRf.Type().String(),
+		ReferValue: referValue,
+		Extra:      extraParams,
+	})
+}
+
 type doConvertInput struct {
 	FromValue  interface{}   // Value that is converted from.
 	ToTypeName string        // Target value type name in string.
-	ReferValue interface{}   // Referred value, a value in type `ToTypeName`.
+	ReferValue interface{}   // Referred value, a value in type `ToTypeName`. Note that its type might be reflect.Value.
 	Extra      []interface{} // Extra values for implementing the converting.
 	// Marks that the value is already converted and set to `ReferValue`. Caller can ignore the returned result.
 	// It is an attribute for internal usage purpose.
@@ -193,7 +216,7 @@ func doConvert(in doConvertInput) (convertedValue interface{}) {
 		}
 		return Time(in.FromValue)
 	case "*time.Time":
-		var v interface{}
+		var v time.Time
 		if len(in.Extra) > 0 {
 			v = Time(in.FromValue, String(in.Extra[0]))
 		} else {
@@ -249,8 +272,13 @@ func doConvert(in doConvertInput) (convertedValue interface{}) {
 	case "[]map[string]interface{}":
 		return Maps(in.FromValue)
 
-	case "json.RawMessage":
-		return Bytes(in.FromValue)
+	case "RawMessage", "json.RawMessage":
+		// issue 3449
+		bytes, err := json.Marshal(in.FromValue)
+		if err != nil {
+			intlog.Errorf(context.TODO(), `%+v`, err)
+		}
+		return bytes
 
 	default:
 		if in.ReferValue != nil {
@@ -260,17 +288,63 @@ func doConvert(in doConvertInput) (convertedValue interface{}) {
 			} else {
 				referReflectValue = reflect.ValueOf(in.ReferValue)
 			}
+			var fromReflectValue reflect.Value
+			if v, ok := in.FromValue.(reflect.Value); ok {
+				fromReflectValue = v
+			} else {
+				fromReflectValue = reflect.ValueOf(in.FromValue)
+			}
+
+			// custom converter.
+			if dstReflectValue, ok, _ := callCustomConverterWithRefer(fromReflectValue, referReflectValue); ok {
+				return dstReflectValue.Interface()
+			}
+
 			defer func() {
 				if recover() != nil {
+					in.alreadySetToReferValue = false
 					if err := bindVarToReflectValue(referReflectValue, in.FromValue, nil); err == nil {
 						in.alreadySetToReferValue = true
 						convertedValue = referReflectValue.Interface()
 					}
 				}
 			}()
+			switch referReflectValue.Kind() {
+			case reflect.Ptr:
+				// Type converting for custom type pointers.
+				// Eg:
+				// type PayMode int
+				// type Req struct{
+				//     Mode *PayMode
+				// }
+				//
+				// Struct(`{"Mode": 1000}`, &req)
+				originType := referReflectValue.Type().Elem()
+				switch originType.Kind() {
+				case reflect.Struct:
+					// Not support some kinds.
+				default:
+					in.ToTypeName = originType.Kind().String()
+					in.ReferValue = nil
+					refElementValue := reflect.ValueOf(doConvert(in))
+					originTypeValue := reflect.New(refElementValue.Type()).Elem()
+					originTypeValue.Set(refElementValue)
+					in.alreadySetToReferValue = true
+					return originTypeValue.Addr().Convert(referReflectValue.Type()).Interface()
+				}
+
+			case reflect.Map:
+				var targetValue = reflect.New(referReflectValue.Type()).Elem()
+				if err := doMapToMap(in.FromValue, targetValue); err == nil {
+					in.alreadySetToReferValue = true
+				}
+				return targetValue.Interface()
+			}
 			in.ToTypeName = referReflectValue.Kind().String()
 			in.ReferValue = nil
-			return reflect.ValueOf(doConvert(in)).Convert(referReflectValue.Type()).Interface()
+			in.alreadySetToReferValue = true
+			convertedValue = reflect.ValueOf(doConvert(in)).Convert(referReflectValue.Type()).Interface()
+			return convertedValue
 		}
 		return in.FromValue
 	}

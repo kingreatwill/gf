@@ -4,7 +4,7 @@
 // If a copy of the MIT was not distributed with this file,
 // You can obtain one at https://github.com/gogf/gf.
 
-// Package gvar provides an universal variable type, like generics.
+// Package gvar provides an universal variable type, like runtime generics.
 package gvar
 
 import (
@@ -28,7 +28,7 @@ type Var struct {
 // The optional parameter `safe` specifies whether Var is used in concurrent-safety,
 // which is false in default.
 func New(value interface{}, safe ...bool) *Var {
-	if len(safe) > 0 && !safe[0] {
+	if len(safe) > 0 && safe[0] {
 		return &Var{
 			value: gtype.NewInterface(value),
 			safe:  true,

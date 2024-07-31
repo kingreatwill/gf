@@ -23,15 +23,16 @@ import (
 )
 
 type doCheckValueInput struct {
-	Name     string                 // Name specifies the name of parameter `value`.
-	Value    interface{}            // Value specifies the value for the rules to be validated.
-	Rule     string                 // Rule specifies the validation rules string, like "required", "required|between:1,100", etc.
-	Messages interface{}            // Messages specifies the custom error messages for this rule from parameters input, which is usually type of map/slice.
-	DataRaw  interface{}            // DataRaw specifies the `raw data` which is passed to the Validator. It might be type of map/struct or a nil value.
-	DataMap  map[string]interface{} // DataMap specifies the map that is converted from `dataRaw`. It is usually used internally
+	Name      string                 // Name specifies the name of parameter `value`, which might be the custom tag name of the parameter.
+	Value     interface{}            // Value specifies the value for the rules to be validated.
+	ValueType reflect.Type           // ValueType specifies the type of the value, mainly used for value type id retrieving.
+	Rule      string                 // Rule specifies the validation rules string, like "required", "required|between:1,100", etc.
+	Messages  interface{}            // Messages specifies the custom error messages for this rule from parameters input, which is usually type of map/slice.
+	DataRaw   interface{}            // DataRaw specifies the `raw data` which is passed to the Validator. It might be type of map/struct or a nil value.
+	DataMap   map[string]interface{} // DataMap specifies the map that is converted from `dataRaw`. It is usually used internally
 }
 
-// doCheckSingleValue does the really rules validation for single key-value.
+// doCheckValue does the really rules validation for single key-value.
 func (v *Validator) doCheckValue(ctx context.Context, in doCheckValueInput) Error {
 	// If there's no validation rules, it does nothing and returns quickly.
 	if in.Rule == "" {
@@ -145,17 +146,14 @@ func (v *Validator) doCheckValue(ctx context.Context, in doCheckValueInput) Erro
 			switch {
 			// Custom validation rules.
 			case customRuleFunc != nil:
-				if err = customRuleFunc(ctx, RuleFuncInput{
-					Rule:    ruleItems[index],
-					Message: message,
-					Value:   gvar.New(value),
-					Data:    gvar.New(in.DataRaw),
-				}); err != nil {
-					// The error should have stack info to indicate the error position.
-					if !gerror.HasStack(err) {
-						err = gerror.NewCodeSkip(gcode.CodeValidationFailed, 1, err.Error())
-					}
-				}
+				err = customRuleFunc(ctx, RuleFuncInput{
+					Rule:      ruleItems[index],
+					Message:   message,
+					Field:     in.Name,
+					ValueType: in.ValueType,
+					Value:     gvar.New(value),
+					Data:      gvar.New(in.DataRaw),
+				})
 
 			// Builtin validation rules.
 			case customRuleFunc == nil && builtinRule != nil:
@@ -163,6 +161,7 @@ func (v *Validator) doCheckValue(ctx context.Context, in doCheckValueInput) Erro
 					RuleKey:     ruleKey,
 					RulePattern: rulePattern,
 					Field:       in.Name,
+					ValueType:   in.ValueType,
 					Value:       gvar.New(value),
 					Data:        gvar.New(in.DataRaw),
 					Message:     message,
@@ -177,24 +176,27 @@ func (v *Validator) doCheckValue(ctx context.Context, in doCheckValueInput) Erro
 
 			// Error handling.
 			if err != nil {
-				// The error should have error code that is `gcode.CodeValidationFailed`.
-				if gerror.Code(err) == gcode.CodeNil {
-					if e, ok := err.(*gerror.Error); ok {
-						e.SetCode(gcode.CodeValidationFailed)
-					}
-				}
-
 				// Error variable replacement for error message.
-				if !gerror.HasStack(err) {
-					var s string
-					s = gstr.ReplaceByMap(err.Error(), map[string]string{
+				if errMsg := err.Error(); gstr.Contains(errMsg, "{") {
+					errMsg = gstr.ReplaceByMap(errMsg, map[string]string{
 						"{field}":     in.Name,             // Field name of the `value`.
 						"{value}":     gconv.String(value), // Current validating value.
 						"{pattern}":   rulePattern,         // The variable part of the rule.
 						"{attribute}": in.Name,             // The same as `{field}`. It is deprecated.
 					})
-					s, _ = gregex.ReplaceString(`\s{2,}`, ` `, s)
-					err = errors.New(s)
+					errMsg, _ = gregex.ReplaceString(`\s{2,}`, ` `, errMsg)
+					err = errors.New(errMsg)
+				}
+				// The error should have stack info to indicate the error position.
+				if !gerror.HasStack(err) {
+					err = gerror.NewCode(gcode.CodeValidationFailed, err.Error())
+				}
+				// The error should have error code that is `gcode.CodeValidationFailed`.
+				if gerror.Code(err) == gcode.CodeNil {
+					// TODO it's better using interface?
+					if e, ok := err.(*gerror.Error); ok {
+						e.SetCode(gcode.CodeValidationFailed)
+					}
 				}
 				ruleErrorMap[ruleKey] = err
 

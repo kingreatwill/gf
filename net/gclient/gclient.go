@@ -18,6 +18,7 @@ import (
 	"github.com/gogf/gf/v2"
 	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/net/gsel"
+	"github.com/gogf/gf/v2/net/gsvc"
 	"github.com/gogf/gf/v2/os/gfile"
 )
 
@@ -30,9 +31,11 @@ type Client struct {
 	authUser          string            // HTTP basic authentication: user.
 	authPass          string            // HTTP basic authentication: pass.
 	retryCount        int               // Retry count when request fails.
+	noUrlEncode       bool              // No url encoding for request parameters.
 	retryInterval     time.Duration     // Retry interval when request fails.
 	middlewareHandler []HandlerFunc     // Interceptor handlers
-	selectorBuilder   gsel.Builder      // Builder for request balance.
+	discovery         gsvc.Discovery    // Discovery for service.
+	builder           gsel.Builder      // Builder for request balance.
 }
 
 const (
@@ -66,12 +69,14 @@ func New() *Client {
 				DisableKeepAlives: true,
 			},
 		},
-		header:  make(map[string]string),
-		cookies: make(map[string]string),
+		header:    make(map[string]string),
+		cookies:   make(map[string]string),
+		builder:   gsel.GetBuilder(),
+		discovery: gsvc.GetRegistry(),
 	}
 	c.header[httpHeaderUserAgent] = defaultClientAgent
 	// It enables OpenTelemetry for client in default.
-	c.Use(internalMiddlewareTracing, internalMiddlewareDiscovery)
+	c.Use(internalMiddlewareObservability, internalMiddlewareDiscovery)
 	return c
 }
 

@@ -12,7 +12,6 @@ package gtime
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -69,9 +68,9 @@ const (
 var (
 	// It's more high performance using regular expression
 	// than time.ParseInLocation to parse the datetime string.
-	timeRegex1, _ = regexp.Compile(timeRegexPattern1)
-	timeRegex2, _ = regexp.Compile(timeRegexPattern2)
-	timeRegex3, _ = regexp.Compile(timeRegexPattern3)
+	timeRegex1 = regexp.MustCompile(timeRegexPattern1)
+	timeRegex2 = regexp.MustCompile(timeRegexPattern2)
+	timeRegex3 = regexp.MustCompile(timeRegexPattern3)
 
 	// Month words to arabic numerals mapping.
 	monthMap = map[string]int{
@@ -101,28 +100,6 @@ var (
 		"december":  12,
 	}
 )
-
-// SetTimeZone sets the time zone for current whole process.
-// The parameter `zone` is an area string specifying corresponding time zone,
-// eg: Asia/Shanghai.
-//
-// This should be called before package "time" import.
-// Please refer to issue: https://github.com/golang/go/issues/34814
-func SetTimeZone(zone string) (err error) {
-	location, err := time.LoadLocation(zone)
-	if err != nil {
-		err = gerror.Wrapf(err, `time.LoadLocation failed for zone "%s"`, zone)
-		return err
-	}
-	var (
-		envKey   = "TZ"
-		envValue = location.String()
-	)
-	if err = os.Setenv(envKey, envValue); err != nil {
-		err = gerror.Wrapf(err, `set environment failed with key "%s", value "%s"`, envKey, envValue)
-	}
-	return
-}
 
 // Timestamp retrieves and returns the timestamp in seconds.
 func Timestamp() int64 {
@@ -300,36 +277,14 @@ func StrToTime(str string, format ...string) (*Time, error) {
 				operation = "-"
 			}
 			// Comparing the given time zone whether equals to current time zone,
-			// it converts it to UTC if they do not equal.
 			_, localOffset := time.Now().Zone()
+			zoneOffset := h*3600 + m*60 + s
+			if operation == "-" {
+				zoneOffset = -zoneOffset
+			}
 			// Comparing in seconds.
-			if (h*3600+m*60+s) != localOffset ||
-				(localOffset > 0 && operation == "-") ||
-				(localOffset < 0 && operation == "+") {
-				local = time.UTC
-				// UTC conversion.
-				switch operation {
-				case "+":
-					if h > 0 {
-						hour -= h
-					}
-					if m > 0 {
-						min -= m
-					}
-					if s > 0 {
-						sec -= s
-					}
-				case "-":
-					if h > 0 {
-						hour += h
-					}
-					if m > 0 {
-						min += m
-					}
-					if s > 0 {
-						sec += s
-					}
-				}
+			if localOffset != zoneOffset {
+				local = time.FixedZone("", zoneOffset)
 			}
 		}
 	}
@@ -386,19 +341,21 @@ func StrToTimeLayout(str string, layout string) (*Time, error) {
 // ParseTimeFromContent retrieves time information for content string, it then parses and returns it
 // as *Time object.
 // It returns the first time information if there are more than one time string in the content.
-// It only retrieves and parses the time information with given `format` if it's passed.
+// It only retrieves and parses the time information with given first matched `format` if it's passed.
 func ParseTimeFromContent(content string, format ...string) *Time {
 	var (
 		err   error
 		match []string
 	)
 	if len(format) > 0 {
-		match, err = gregex.MatchString(formatToRegexPattern(format[0]), content)
-		if err != nil {
-			intlog.Errorf(context.TODO(), `%+v`, err)
-		}
-		if len(match) > 0 {
-			return NewFromStrFormat(match[0], format[0])
+		for _, item := range format {
+			match, err = gregex.MatchString(formatToRegexPattern(item), content)
+			if err != nil {
+				intlog.Errorf(context.TODO(), `%+v`, err)
+			}
+			if len(match) > 0 {
+				return NewFromStrFormat(match[0], item)
+			}
 		}
 	} else {
 		if match = timeRegex1.FindStringSubmatch(content); len(match) >= 1 {

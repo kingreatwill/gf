@@ -7,16 +7,46 @@
 package gdb
 
 import (
-	"context"
+	"fmt"
 	"testing"
 
 	"github.com/gogf/gf/v2/test/gtest"
+	"github.com/gogf/gf/v2/text/gregex"
 )
 
-var (
-	db  DB
-	ctx = context.TODO()
-)
+func Test_HookSelect_Regex(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			err              error
+			toBeCommittedSql = `select * from "user" where 1=1`
+		)
+		toBeCommittedSql, err = gregex.ReplaceStringFuncMatch(
+			`(?i) FROM ([\S]+)`,
+			toBeCommittedSql,
+			func(match []string) string {
+
+				return fmt.Sprintf(` FROM "%s"`, "user_1")
+			},
+		)
+		t.AssertNil(err)
+		t.Assert(toBeCommittedSql, `select * FROM "user_1" where 1=1`)
+	})
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			err              error
+			toBeCommittedSql = `select * from user`
+		)
+		toBeCommittedSql, err = gregex.ReplaceStringFuncMatch(
+			`(?i) FROM ([\S]+)`,
+			toBeCommittedSql,
+			func(match []string) string {
+				return fmt.Sprintf(` FROM %s`, "user_1")
+			},
+		)
+		t.AssertNil(err)
+		t.Assert(toBeCommittedSql, `select * FROM user_1`)
+	})
+}
 
 func Test_parseConfigNodeLink_WithType(t *testing.T) {
 	gtest.C(t, func(t *gtest.T) {
@@ -185,6 +215,22 @@ func Test_parseConfigNodeLink_WithType(t *testing.T) {
 		t.Assert(newNode.Extra, ``)
 		t.Assert(newNode.Charset, defaultCharset)
 		t.Assert(newNode.Protocol, `file`)
+	})
+	// #3146
+	gtest.C(t, func(t *gtest.T) {
+		node := &ConfigNode{
+			Link: `pgsql:BASIC$xxxx:123456@tcp(xxxx.hologres.aliyuncs.com:80)/xxx`,
+		}
+		newNode := parseConfigNodeLink(node)
+		t.Assert(newNode.Type, `pgsql`)
+		t.Assert(newNode.User, `BASIC$xxxx`)
+		t.Assert(newNode.Pass, `123456`)
+		t.Assert(newNode.Host, `xxxx.hologres.aliyuncs.com`)
+		t.Assert(newNode.Port, `80`)
+		t.Assert(newNode.Name, `xxx`)
+		t.Assert(newNode.Extra, ``)
+		t.Assert(newNode.Charset, defaultCharset)
+		t.Assert(newNode.Protocol, `tcp`)
 	})
 }
 

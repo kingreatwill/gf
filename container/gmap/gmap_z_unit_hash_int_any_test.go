@@ -118,6 +118,22 @@ func Test_IntAnyMap_Batch(t *testing.T) {
 	})
 }
 
+func Test_IntAnyMap_Iterator_Deadlock(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		m := gmap.NewIntAnyMapFrom(map[int]interface{}{1: 1, 2: 2, 3: "3", 4: 4}, true)
+		m.Iterator(func(k int, _ interface{}) bool {
+			if k%2 == 0 {
+				m.Remove(k)
+			}
+			return true
+		})
+		t.Assert(m.Map(), map[int]interface{}{
+			1: 1,
+			3: "3",
+		})
+	})
+}
+
 func Test_IntAnyMap_Iterator(t *testing.T) {
 	gtest.C(t, func(t *gtest.T) {
 		expect := map[int]interface{}{1: 1, 2: "2"}
@@ -373,5 +389,41 @@ func Test_IntAnyMap_DeepCopy(t *testing.T) {
 		n := m.DeepCopy().(*gmap.IntAnyMap)
 		n.Set(1, "val1")
 		t.AssertNE(m.Get(1), n.Get(1))
+	})
+}
+
+func Test_IntAnyMap_IsSubOf(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		m1 := gmap.NewIntAnyMapFrom(g.MapIntAny{
+			1: "v1",
+			2: "v2",
+		})
+		m2 := gmap.NewIntAnyMapFrom(g.MapIntAny{
+			2: "v2",
+		})
+		t.Assert(m1.IsSubOf(m2), false)
+		t.Assert(m2.IsSubOf(m1), true)
+		t.Assert(m2.IsSubOf(m2), true)
+	})
+}
+
+func Test_IntAnyMap_Diff(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		m1 := gmap.NewIntAnyMapFrom(g.MapIntAny{
+			0: "v0",
+			1: "v1",
+			2: "v2",
+			3: 3,
+		})
+		m2 := gmap.NewIntAnyMapFrom(g.MapIntAny{
+			0: "v0",
+			2: "v2",
+			3: "v3",
+			4: "v4",
+		})
+		addedKeys, removedKeys, updatedKeys := m1.Diff(m2)
+		t.Assert(addedKeys, []int{4})
+		t.Assert(removedKeys, []int{1})
+		t.Assert(updatedKeys, []int{3})
 	})
 }

@@ -13,41 +13,48 @@ import (
 	"github.com/gogf/gf/v2/internal/intlog"
 )
 
-// getFixedSecond checks, fixes and returns the seconds that have delay fix in some seconds.
-// Reference: https://github.com/golang/go/issues/14410
-func (s *cronSchedule) getFixedSecond(ctx context.Context, t time.Time) int {
-	return (t.Second() + s.getFixedTimestampDelta(ctx, t)) % 60
-}
-
-// getFixedTimestampDelta checks, fixes and returns the timestamp delta that have delay fix in some seconds.
-// The tolerated timestamp delay is `3` seconds in default.
-func (s *cronSchedule) getFixedTimestampDelta(ctx context.Context, t time.Time) int {
+// getAndUpdateLastCheckTimestamp checks fixes and returns the last timestamp that have delay fix in some seconds.
+func (s *cronSchedule) getAndUpdateLastCheckTimestamp(ctx context.Context, t time.Time) int64 {
 	var (
-		currentTimestamp = t.Unix()
-		lastTimestamp    = s.lastTimestamp.Val()
-		delta            int
+		currentTimestamp   = t.Unix()
+		lastCheckTimestamp = s.lastCheckTimestamp.Val()
 	)
 	switch {
+	// Often happens, timer triggers in the same second, but the millisecond is different.
+	// Example:
+	// lastCheckTimestamp: 2024-03-26 19:47:34.000
+	// currentTimestamp:   2024-03-26 19:47:34.999
 	case
-		lastTimestamp == currentTimestamp-1:
-		lastTimestamp = currentTimestamp
+		lastCheckTimestamp == currentTimestamp:
+		lastCheckTimestamp += 1
 
+	// Often happens, no latency.
+	// Example:
+	// lastCheckTimestamp: 2024-03-26 19:47:34.000
+	// currentTimestamp:   2024-03-26 19:47:35.000
 	case
-		lastTimestamp == currentTimestamp-2,
-		lastTimestamp == currentTimestamp-3,
-		lastTimestamp == currentTimestamp:
-		lastTimestamp += 1
-		delta = 1
+		lastCheckTimestamp == currentTimestamp-1:
+		lastCheckTimestamp = currentTimestamp
 
+	// Latency in 3 seconds, which can be tolerant.
+	// Example:
+	// lastCheckTimestamp: 2024-03-26 19:47:31.000、2024-03-26 19:47:32.000
+	// currentTimestamp:   2024-03-26 19:47:34.000
+	case
+		lastCheckTimestamp == currentTimestamp-2,
+		lastCheckTimestamp == currentTimestamp-3:
+		lastCheckTimestamp += 1
+
+	// Too much latency, it ignores the fix, the cron job might not be triggered.
 	default:
 		// Too much delay, let's update the last timestamp to current one.
 		intlog.Printf(
 			ctx,
-			`too much delay, last timestamp "%d", current "%d"`,
-			lastTimestamp, currentTimestamp,
+			`too much latency, last timestamp "%d", current "%d", latency "%d"`,
+			lastCheckTimestamp, currentTimestamp, currentTimestamp-lastCheckTimestamp,
 		)
-		lastTimestamp = currentTimestamp
+		lastCheckTimestamp = currentTimestamp
 	}
-	s.lastTimestamp.Set(lastTimestamp)
-	return delta
+	s.lastCheckTimestamp.Set(lastCheckTimestamp)
+	return lastCheckTimestamp
 }

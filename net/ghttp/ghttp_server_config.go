@@ -19,6 +19,7 @@ import (
 	"github.com/gogf/gf/v2/errors/gcode"
 	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/internal/intlog"
+	"github.com/gogf/gf/v2/net/gsvc"
 	"github.com/gogf/gf/v2/os/gfile"
 	"github.com/gogf/gf/v2/os/glog"
 	"github.com/gogf/gf/v2/os/gres"
@@ -32,10 +33,14 @@ import (
 const (
 	defaultHttpAddr  = ":80"  // Default listening port for HTTP.
 	defaultHttpsAddr = ":443" // Default listening port for HTTPS.
-	UriTypeDefault   = 0      // Method names to the URI converting type, which converts name to its lower case and joins the words using char '-'.
-	UriTypeFullName  = 1      // Method names to the URI converting type, which does not convert to the method name.
-	UriTypeAllLower  = 2      // Method names to the URI converting type, which converts name to its lower case.
-	UriTypeCamel     = 3      // Method names to the URI converting type, which converts name to its camel case.
+
+)
+
+const (
+	UriTypeDefault  = iota // Method names to the URI converting type, which converts name to its lower case and joins the words using char '-'.
+	UriTypeFullName        // Method names to the URI converting type, which does not convert to the method name.
+	UriTypeAllLower        // Method names to the URI converting type, which converts name to its lower case.
+	UriTypeCamel           // Method names to the URI converting type, which converts name to its camel case.
 )
 
 // ServerConfig is the HTTP Server configuration manager.
@@ -56,6 +61,9 @@ type ServerConfig struct {
 
 	// Listeners specifies the custom listeners.
 	Listeners []net.Listener `json:"listeners"`
+
+	// Endpoints are custom endpoints for service register, it uses Address if empty.
+	Endpoints []string `json:"endpoints"`
 
 	// HTTPSCertPath specifies certification file path for HTTPS service.
 	HTTPSCertPath string `json:"httpsCertPath"`
@@ -91,7 +99,7 @@ type ServerConfig struct {
 	WriteTimeout time.Duration `json:"writeTimeout"`
 
 	// IdleTimeout is the maximum amount of time to wait for the
-	// next request when keep-alives are enabled. If IdleTimeout
+	// next request when keep-alive are enabled. If IdleTimeout
 	// is zero, the value of ReadTimeout is used. If both are
 	// zero, there is no timeout.
 	IdleTimeout time.Duration `json:"idleTimeout"`
@@ -218,8 +226,9 @@ type ServerConfig struct {
 	// API & Swagger.
 	// ======================================================================================================
 
-	OpenApiPath string `json:"openapiPath"` // OpenApiPath specifies the OpenApi specification file path.
-	SwaggerPath string `json:"swaggerPath"` // SwaggerPath specifies the swagger UI path for route registering.
+	OpenApiPath       string `json:"openapiPath"`       // OpenApiPath specifies the OpenApi specification file path.
+	SwaggerPath       string `json:"swaggerPath"`       // SwaggerPath specifies the swagger UI path for route registering.
+	SwaggerUITemplate string `json:"swaggerUITemplate"` // SwaggerUITemplate specifies the swagger UI custom template
 
 	// ======================================================================================================
 	// Other.
@@ -251,6 +260,9 @@ type ServerConfig struct {
 
 	// GracefulTimeout set the maximum survival time (seconds) of the parent process.
 	GracefulTimeout uint8 `json:"gracefulTimeout"`
+
+	// GracefulShutdownTimeout set the maximum survival time (seconds) before stopping the server.
+	GracefulShutdownTimeout uint8 `json:"gracefulShutdownTimeout"`
 }
 
 // NewConfig creates and returns a ServerConfig object with default configurations.
@@ -258,44 +270,45 @@ type ServerConfig struct {
 // some pointer attributes that may be shared in different servers.
 func NewConfig() ServerConfig {
 	return ServerConfig{
-		Name:                DefaultServerName,
-		Address:             ":0",
-		HTTPSAddr:           "",
-		Listeners:           nil,
-		Handler:             nil,
-		ReadTimeout:         60 * time.Second,
-		WriteTimeout:        0, // No timeout.
-		IdleTimeout:         60 * time.Second,
-		MaxHeaderBytes:      10240, // 10KB
-		KeepAlive:           true,
-		IndexFiles:          []string{"index.html", "index.htm"},
-		IndexFolder:         false,
-		ServerAgent:         "GoFrame HTTP Server",
-		ServerRoot:          "",
-		StaticPaths:         make([]staticPathItem, 0),
-		FileServerEnabled:   false,
-		CookieMaxAge:        time.Hour * 24 * 365,
-		CookiePath:          "/",
-		CookieDomain:        "",
-		SessionIdName:       "gfsessionid",
-		SessionPath:         gsession.DefaultStorageFilePath,
-		SessionMaxAge:       time.Hour * 24,
-		SessionCookieOutput: true,
-		SessionCookieMaxAge: time.Hour * 24,
-		Logger:              glog.New(),
-		LogLevel:            "all",
-		LogStdout:           true,
-		ErrorStack:          true,
-		ErrorLogEnabled:     true,
-		ErrorLogPattern:     "error-{Ymd}.log",
-		AccessLogEnabled:    false,
-		AccessLogPattern:    "access-{Ymd}.log",
-		DumpRouterMap:       true,
-		ClientMaxBodySize:   8 * 1024 * 1024, // 8MB
-		FormParsingMemory:   1024 * 1024,     // 1MB
-		Rewrites:            make(map[string]string),
-		Graceful:            false,
-		GracefulTimeout:     2, // seconds
+		Name:                    DefaultServerName,
+		Address:                 ":0",
+		HTTPSAddr:               "",
+		Listeners:               nil,
+		Handler:                 nil,
+		ReadTimeout:             60 * time.Second,
+		WriteTimeout:            0, // No timeout.
+		IdleTimeout:             60 * time.Second,
+		MaxHeaderBytes:          10240, // 10KB
+		KeepAlive:               true,
+		IndexFiles:              []string{"index.html", "index.htm"},
+		IndexFolder:             false,
+		ServerAgent:             "GoFrame HTTP Server",
+		ServerRoot:              "",
+		StaticPaths:             make([]staticPathItem, 0),
+		FileServerEnabled:       false,
+		CookieMaxAge:            time.Hour * 24 * 365,
+		CookiePath:              "/",
+		CookieDomain:            "",
+		SessionIdName:           "gfsessionid",
+		SessionPath:             gsession.DefaultStorageFilePath,
+		SessionMaxAge:           time.Hour * 24,
+		SessionCookieOutput:     true,
+		SessionCookieMaxAge:     time.Hour * 24,
+		Logger:                  glog.New(),
+		LogLevel:                "all",
+		LogStdout:               true,
+		ErrorStack:              true,
+		ErrorLogEnabled:         true,
+		ErrorLogPattern:         "error-{Ymd}.log",
+		AccessLogEnabled:        false,
+		AccessLogPattern:        "access-{Ymd}.log",
+		DumpRouterMap:           true,
+		ClientMaxBodySize:       8 * 1024 * 1024, // 8MB
+		FormParsingMemory:       1024 * 1024,     // 1MB
+		Rewrites:                make(map[string]string),
+		Graceful:                false,
+		GracefulTimeout:         2, // seconds
+		GracefulShutdownTimeout: 5, // seconds
 	}
 }
 
@@ -517,6 +530,11 @@ func (s *Server) SetName(name string) {
 	s.config.Name = name
 }
 
+// SetEndpoints sets the Endpoints for the server.
+func (s *Server) SetEndpoints(endpoints []string) {
+	s.config.Endpoints = endpoints
+}
+
 // SetHandler sets the request handler for server.
 func (s *Server) SetHandler(h func(w http.ResponseWriter, r *http.Request)) {
 	s.config.Handler = h
@@ -528,4 +546,14 @@ func (s *Server) GetHandler() func(w http.ResponseWriter, r *http.Request) {
 		return s.ServeHTTP
 	}
 	return s.config.Handler
+}
+
+// SetRegistrar sets the Registrar for server.
+func (s *Server) SetRegistrar(registrar gsvc.Registrar) {
+	s.registrar = registrar
+}
+
+// GetRegistrar returns the Registrar of server.
+func (s *Server) GetRegistrar() gsvc.Registrar {
+	return s.registrar
 }

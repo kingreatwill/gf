@@ -9,6 +9,7 @@ package gudp_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -29,9 +30,14 @@ func startUDPServer(addr string) *gudp.Server {
 		for {
 			data, err := conn.Recv(-1)
 			if err != nil {
+				if err != io.EOF {
+					glog.Error(context.TODO(), err)
+				}
 				break
 			}
-			conn.Send(data)
+			if err = conn.Send(data); err != nil {
+				glog.Error(context.TODO(), err)
+			}
 		}
 	})
 	go s.Run()
@@ -100,7 +106,7 @@ func Test_Basic(t *testing.T) {
 			t.AssertNil(err)
 			err = conn.Send([]byte(gconv.String(i)))
 			t.AssertNil(err)
-			conn.SetRecvBufferWait(time.Millisecond * 100)
+			conn.SetBufferWaitRecv(time.Millisecond * 100)
 			result, err := conn.RecvWithTimeout(-1, time.Second)
 			t.AssertNil(err)
 			t.Assert(string(result), fmt.Sprintf(`> %d`, i))

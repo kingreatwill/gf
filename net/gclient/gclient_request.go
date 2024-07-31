@@ -10,10 +10,8 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -25,6 +23,7 @@ import (
 	"github.com/gogf/gf/v2/internal/json"
 	"github.com/gogf/gf/v2/internal/utils"
 	"github.com/gogf/gf/v2/os/gfile"
+	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/text/gregex"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
@@ -84,26 +83,36 @@ func (c *Client) Trace(ctx context.Context, url string, data ...interface{}) (*R
 	return c.DoRequest(ctx, http.MethodTrace, url, data...)
 }
 
-// PostForm issues a POST to the specified URL,
-// with data's keys and values URL-encoded as the request body.
+// PostForm is different from net/http.PostForm.
+// It's a wrapper of Post method, which sets the Content-Type as "multipart/form-data;".
+// and It will automatically set boundary characters for the request body and Content-Type.
 //
-// The Content-Type header is set to application/x-www-form-urlencoded.
-// To set other headers, use NewRequest and Client.Do.
+// It's Seem like the following case:
 //
-// When err is nil, resp always contains a non-nil resp.Body.
-// Caller should close resp.Body when done reading from it.
+// Content-Type: multipart/form-data; boundary=----Boundarye4Ghaog6giyQ9ncN
 //
-// See the Client.Do method documentation for details on how redirects
-// are handled.
+// And form data is like:
+// ------Boundarye4Ghaog6giyQ9ncN
+// Content-Disposition: form-data; name="checkType"
 //
-// To make a request with a specified context.Context, use NewRequestWithContext
-// and Client.Do.
-// Deprecated: use Post instead.
-func (c *Client) PostForm(url string, data url.Values) (resp *Response, err error) {
-	return nil, gerror.NewCode(
-		gcode.CodeNotSupported,
-		`PostForm is not supported, please use Post instead`,
-	)
+// none
+//
+// It's used for sending form data.
+// Note that the response object MUST be closed if it'll never be used.
+func (c *Client) PostForm(ctx context.Context, url string, data map[string]string) (resp *Response, err error) {
+	body := new(bytes.Buffer)
+	w := multipart.NewWriter(body)
+	for k, v := range data {
+		err := w.WriteField(k, v)
+		if err != nil {
+			return nil, err
+		}
+	}
+	err = w.Close()
+	if err != nil {
+		return nil, err
+	}
+	return c.ContentType(w.FormDataContentType()).Post(ctx, url, body)
 }
 
 // DoRequest sends request with given HTTP method and data and returns the response object.
@@ -113,11 +122,18 @@ func (c *Client) PostForm(url string, data url.Values) (resp *Response, err erro
 // else it uses "application/x-www-form-urlencoded". It also automatically detects the post
 // content for JSON format, and for that it automatically sets the Content-Type as
 // "application/json".
-func (c *Client) DoRequest(ctx context.Context, method, url string, data ...interface{}) (resp *Response, err error) {
+func (c *Client) DoRequest(
+	ctx context.Context, method, url string, data ...interface{},
+) (resp *Response, err error) {
+	var requestStartTime = gtime.Now()
 	req, err := c.prepareRequest(ctx, method, url, data...)
 	if err != nil {
 		return nil, err
 	}
+
+	// Metrics.
+	c.handleMetricsBeforeRequest(req)
+	defer c.handleMetricsAfterRequestDone(req, requestStartTime)
 
 	// Client middleware.
 	if len(c.middlewareHandler) > 0 {
@@ -135,6 +151,9 @@ func (c *Client) DoRequest(ctx context.Context, method, url string, data ...inte
 		resp, err = c.Next(req)
 	} else {
 		resp, err = c.callRequest(req)
+	}
+	if resp != nil && resp.Response != nil {
+		req.Response = resp.Response
 	}
 	return resp, err
 }
@@ -175,7 +194,7 @@ func (c *Client) prepareRequest(ctx context.Context, method, url string, data ..
 				}
 			}
 		default:
-			params = httputil.BuildParams(data[0])
+			params = httputil.BuildParams(data[0], c.noUrlEncode)
 		}
 	}
 	if method == http.MethodGet {
@@ -328,10 +347,10 @@ func (c *Client) callRequest(req *http.Request) (resp *Response, err error) {
 	// Dump feature.
 	// The request body can be reused for dumping
 	// raw HTTP request-response procedure.
-	reqBodyContent, _ := ioutil.ReadAll(req.Body)
+	reqBodyContent, _ := io.ReadAll(req.Body)
 	resp.requestBody = reqBodyContent
-	req.Body = utils.NewReadCloser(reqBodyContent, false)
 	for {
+		req.Body = utils.NewReadCloser(reqBodyContent, false)
 		if resp.Response, err = c.Do(req); err != nil {
 			err = gerror.Wrapf(err, `request failed`)
 			// The response might not be nil when err != nil.

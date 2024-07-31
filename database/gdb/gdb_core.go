@@ -14,12 +14,15 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/gogf/gf/v2/container/gmap"
+	"github.com/gogf/gf/v2/container/gset"
 	"github.com/gogf/gf/v2/container/gvar"
 	"github.com/gogf/gf/v2/errors/gcode"
 	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/internal/intlog"
 	"github.com/gogf/gf/v2/internal/reflection"
 	"github.com/gogf/gf/v2/internal/utils"
+	"github.com/gogf/gf/v2/os/gcache"
 	"github.com/gogf/gf/v2/text/gregex"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
@@ -54,7 +57,7 @@ func (c *Core) Ctx(ctx context.Context) DB {
 		panic(err)
 	}
 	newCore.ctx = WithDB(ctx, newCore.db)
-	newCore.ctx = c.InjectInternalCtxData(newCore.ctx)
+	newCore.ctx = c.injectInternalCtxData(newCore.ctx)
 	return newCore.db
 }
 
@@ -65,7 +68,7 @@ func (c *Core) GetCtx() context.Context {
 	if ctx == nil {
 		ctx = context.TODO()
 	}
-	return c.InjectInternalCtxData(ctx)
+	return c.injectInternalCtxData(ctx)
 }
 
 // GetCtxTimeout returns the context and cancel function for specified timeout type.
@@ -104,7 +107,7 @@ func (c *Core) Close(ctx context.Context) (err error) {
 	if err = c.cache.Close(ctx); err != nil {
 		return err
 	}
-	c.links.LockFunc(func(m map[string]interface{}) {
+	c.links.LockFunc(func(m map[any]any) {
 		for k, v := range m {
 			if db, ok := v.(*sql.DB); ok {
 				err = db.Close()
@@ -125,13 +128,21 @@ func (c *Core) Close(ctx context.Context) (err error) {
 // Master creates and returns a connection from master node if master-slave configured.
 // It returns the default connection if master-slave not configured.
 func (c *Core) Master(schema ...string) (*sql.DB, error) {
-	return c.getSqlDb(true, gutil.GetOrDefaultStr(c.schema, schema...))
+	var (
+		usedSchema   = gutil.GetOrDefaultStr(c.schema, schema...)
+		charL, charR = c.db.GetChars()
+	)
+	return c.getSqlDb(true, gstr.Trim(usedSchema, charL+charR))
 }
 
 // Slave creates and returns a connection from slave node if master-slave configured.
 // It returns the default connection if master-slave not configured.
 func (c *Core) Slave(schema ...string) (*sql.DB, error) {
-	return c.getSqlDb(false, gutil.GetOrDefaultStr(c.schema, schema...))
+	var (
+		usedSchema   = gutil.GetOrDefaultStr(c.schema, schema...)
+		charL, charR = c.db.GetChars()
+	)
+	return c.getSqlDb(false, gstr.Trim(usedSchema, charL+charR))
 }
 
 // GetAll queries and returns data records from database.
@@ -381,7 +392,30 @@ func (c *Core) Save(ctx context.Context, table string, data interface{}, batch .
 	return c.Model(table).Ctx(ctx).Data(data).Save()
 }
 
-// DoInsert inserts or updates data forF given table.
+func (c *Core) fieldsToSequence(ctx context.Context, table string, fields []string) ([]string, error) {
+	var (
+		fieldSet               = gset.NewStrSetFrom(fields)
+		fieldsResultInSequence = make([]string, 0)
+		tableFields, err       = c.db.TableFields(ctx, table)
+	)
+	if err != nil {
+		return nil, err
+	}
+	// Sort the fields in order.
+	var fieldsOfTableInSequence = make([]string, len(tableFields))
+	for _, field := range tableFields {
+		fieldsOfTableInSequence[field.Index] = field.Name
+	}
+	// Sort the input fields.
+	for _, fieldName := range fieldsOfTableInSequence {
+		if fieldSet.Contains(fieldName) {
+			fieldsResultInSequence = append(fieldsResultInSequence, fieldName)
+		}
+	}
+	return fieldsResultInSequence, nil
+}
+
+// DoInsert inserts or updates data for given table.
 // This function is usually used for custom interface definition, you do not need call it manually.
 // The parameter `data` can be type of map/gmap/struct/*struct/[]map/[]struct, etc.
 // Eg:
@@ -389,10 +423,10 @@ func (c *Core) Save(ctx context.Context, table string, data interface{}, batch .
 // Data(g.Slice{g.Map{"uid": 10000, "name":"john"}, g.Map{"uid": 20000, "name":"smith"})
 //
 // The parameter `option` values are as follows:
-// 0: insert:  just insert, if there's unique/primary key in the data, it returns error;
-// 1: replace: if there's unique/primary key in the data, it deletes it from table and inserts a new one;
-// 2: save:    if there's unique/primary key in the data, it updates it or else inserts a new one;
-// 3: ignore:  if there's unique/primary key in the data, it ignores the inserting;
+// InsertOptionDefault: just insert, if there's unique/primary key in the data, it returns error;
+// InsertOptionReplace: if there's unique/primary key in the data, it deletes it from table and inserts a new one;
+// InsertOptionSave:    if there's unique/primary key in the data, it updates it or else inserts a new one;
+// InsertOptionIgnore:  if there's unique/primary key in the data, it ignores the inserting;
 func (c *Core) DoInsert(ctx context.Context, link Link, table string, list List, option DoInsertOption) (result sql.Result, err error) {
 	var (
 		keys           []string      // Field names.
@@ -400,10 +434,53 @@ func (c *Core) DoInsert(ctx context.Context, link Link, table string, list List,
 		params         []interface{} // Values that will be committed to underlying database driver.
 		onDuplicateStr string        // onDuplicateStr is used in "ON DUPLICATE KEY UPDATE" statement.
 	)
-	// Handle the field names and placeholders.
-	for k := range list[0] {
-		keys = append(keys, k)
+	// ============================================================================================
+	// Group the list by fields. Different fields to different list.
+	// It here uses ListMap to keep sequence for data inserting.
+	// ============================================================================================
+	var keyListMap = gmap.NewListMap()
+	for _, item := range list {
+		var (
+			tmpKeys              = make([]string, 0)
+			tmpKeysInSequenceStr string
+		)
+		for k := range item {
+			tmpKeys = append(tmpKeys, k)
+		}
+		keys, err = c.fieldsToSequence(ctx, table, tmpKeys)
+		if err != nil {
+			return nil, err
+		}
+		tmpKeysInSequenceStr = gstr.Join(keys, ",")
+		if !keyListMap.Contains(tmpKeysInSequenceStr) {
+			keyListMap.Set(tmpKeysInSequenceStr, make(List, 0))
+		}
+		tmpKeysInSequenceList := keyListMap.Get(tmpKeysInSequenceStr).(List)
+		tmpKeysInSequenceList = append(tmpKeysInSequenceList, item)
+		keyListMap.Set(tmpKeysInSequenceStr, tmpKeysInSequenceList)
 	}
+	if keyListMap.Size() > 1 {
+		var (
+			tmpResult    sql.Result
+			sqlResult    SqlResult
+			rowsAffected int64
+		)
+		keyListMap.Iterator(func(key, value interface{}) bool {
+			tmpResult, err = c.DoInsert(ctx, link, table, value.(List), option)
+			if err != nil {
+				return false
+			}
+			rowsAffected, err = tmpResult.RowsAffected()
+			if err != nil {
+				return false
+			}
+			sqlResult.Result = tmpResult
+			sqlResult.Affected += rowsAffected
+			return true
+		})
+		return &sqlResult, err
+	}
+
 	// Prepare the batch result pointer.
 	var (
 		charL, charR = c.db.GetChars()
@@ -411,12 +488,16 @@ func (c *Core) DoInsert(ctx context.Context, link Link, table string, list List,
 		keysStr      = charL + strings.Join(keys, charR+","+charL) + charR
 		operation    = GetInsertOperationByOption(option.InsertOption)
 	)
+	// Upsert clause only takes effect on Save operation.
 	if option.InsertOption == InsertOptionSave {
-		onDuplicateStr = c.formatOnDuplicate(keys, option)
+		onDuplicateStr, err = c.db.FormatUpsert(keys, list, option)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var (
-		listLength  = len(list)
-		valueHolder = make([]string, 0)
+		listLength   = len(list)
+		valueHolders = make([]string, 0)
 	)
 	for i := 0; i < listLength; i++ {
 		values = values[:0]
@@ -430,9 +511,9 @@ func (c *Core) DoInsert(ctx context.Context, link Link, table string, list List,
 				params = append(params, list[i][k])
 			}
 		}
-		valueHolder = append(valueHolder, "("+gstr.Join(values, ",")+")")
+		valueHolders = append(valueHolders, "("+gstr.Join(values, ",")+")")
 		// Batch package checks: It meets the batch number, or it is the last element.
-		if len(valueHolder) == option.BatchCount || (i == listLength-1 && len(valueHolder) > 0) {
+		if len(valueHolders) == option.BatchCount || (i == listLength-1 && len(valueHolders) > 0) {
 			var (
 				stdSqlResult sql.Result
 				affectedRows int64
@@ -440,7 +521,7 @@ func (c *Core) DoInsert(ctx context.Context, link Link, table string, list List,
 			stdSqlResult, err = c.db.DoExec(ctx, link, fmt.Sprintf(
 				"%s INTO %s(%s) VALUES%s %s",
 				operation, c.QuotePrefixTableName(table), keysStr,
-				gstr.Join(valueHolder, ","),
+				gstr.Join(valueHolders, ","),
 				onDuplicateStr,
 			), params...)
 			if err != nil {
@@ -454,53 +535,10 @@ func (c *Core) DoInsert(ctx context.Context, link Link, table string, list List,
 				batchResult.Affected += affectedRows
 			}
 			params = params[:0]
-			valueHolder = valueHolder[:0]
+			valueHolders = valueHolders[:0]
 		}
 	}
 	return batchResult, nil
-}
-
-func (c *Core) formatOnDuplicate(columns []string, option DoInsertOption) string {
-	var onDuplicateStr string
-	if option.OnDuplicateStr != "" {
-		onDuplicateStr = option.OnDuplicateStr
-	} else if len(option.OnDuplicateMap) > 0 {
-		for k, v := range option.OnDuplicateMap {
-			if len(onDuplicateStr) > 0 {
-				onDuplicateStr += ","
-			}
-			switch v.(type) {
-			case Raw, *Raw:
-				onDuplicateStr += fmt.Sprintf(
-					"%s=%s",
-					c.QuoteWord(k),
-					v,
-				)
-			default:
-				onDuplicateStr += fmt.Sprintf(
-					"%s=VALUES(%s)",
-					c.QuoteWord(k),
-					c.QuoteWord(gconv.String(v)),
-				)
-			}
-		}
-	} else {
-		for _, column := range columns {
-			// If it's SAVE operation, do not automatically update the creating time.
-			if c.isSoftCreatedFieldName(column) {
-				continue
-			}
-			if len(onDuplicateStr) > 0 {
-				onDuplicateStr += ","
-			}
-			onDuplicateStr += fmt.Sprintf(
-				"%s=VALUES(%s)",
-				c.QuoteWord(column),
-				c.QuoteWord(column),
-			)
-		}
-	}
-	return fmt.Sprintf("ON DUPLICATE KEY UPDATE %s", onDuplicateStr)
 }
 
 // Update does "UPDATE ... " statement for the table.
@@ -559,11 +597,24 @@ func (c *Core) DoUpdate(ctx context.Context, link Link, table string, data inter
 				}
 			}
 		)
-		dataMap, err = c.db.ConvertDataForRecord(ctx, data)
+		dataMap, err = c.ConvertDataForRecord(ctx, data, table)
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range dataMap {
+		// Sort the data keys in sequence of table fields.
+		var (
+			dataKeys       = make([]string, 0)
+			keysInSequence = make([]string, 0)
+		)
+		for k := range dataMap {
+			dataKeys = append(dataKeys, k)
+		}
+		keysInSequence, err = c.fieldsToSequence(ctx, table, dataKeys)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range keysInSequence {
+			v := dataMap[k]
 			switch value := v.(type) {
 			case *Counter:
 				counterHandler(k, *value)
@@ -597,7 +648,12 @@ func (c *Core) DoUpdate(ctx context.Context, link Link, table string, data inter
 			return nil, err
 		}
 	}
-	return c.db.DoExec(ctx, link, fmt.Sprintf("UPDATE %s SET %s%s", table, updates, condition), args...)
+	return c.db.DoExec(ctx, link, fmt.Sprintf(
+		"UPDATE %s SET %s%s",
+		table, updates, condition,
+	),
+		args...,
+	)
 }
 
 // Delete does "DELETE FROM ... " statement for the table.
@@ -668,31 +724,50 @@ func (c *Core) writeSqlToLogger(ctx context.Context, sql *Sql) {
 
 // HasTable determine whether the table name exists in the database.
 func (c *Core) HasTable(name string) (bool, error) {
-	var (
-		ctx      = c.db.GetCtx()
-		cacheKey = fmt.Sprintf(`HasTable: %s`, name)
-	)
-	result, err := c.GetCache().GetOrSetFuncLock(ctx, cacheKey, func(ctx context.Context) (interface{}, error) {
-		tableList, err := c.db.Tables(ctx)
-		if err != nil {
-			return false, err
-		}
-		for _, table := range tableList {
-			if table == name {
-				return true, nil
-			}
-		}
-		return false, nil
-	}, 0,
-	)
+	tables, err := c.GetTablesWithCache()
 	if err != nil {
 		return false, err
 	}
-	return result.Bool(), nil
+	charL, charR := c.db.GetChars()
+	name = gstr.Trim(name, charL+charR)
+	for _, table := range tables {
+		if table == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
-// isSoftCreatedFieldName checks and returns whether given filed name is an automatic-filled created time.
-func (c *Core) isSoftCreatedFieldName(fieldName string) bool {
+func (c *Core) GetInnerMemCache() *gcache.Cache {
+	return c.innerMemCache
+}
+
+// GetTablesWithCache retrieves and returns the table names of current database with cache.
+func (c *Core) GetTablesWithCache() ([]string, error) {
+	var (
+		ctx           = c.db.GetCtx()
+		cacheKey      = fmt.Sprintf(`Tables:%s`, c.db.GetGroup())
+		cacheDuration = gcache.DurationNoExpire
+		innerMemCache = c.GetInnerMemCache()
+	)
+	result, err := innerMemCache.GetOrSetFuncLock(
+		ctx, cacheKey,
+		func(ctx context.Context) (interface{}, error) {
+			tableList, err := c.db.Tables(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return tableList, nil
+		}, cacheDuration,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return result.Strings(), nil
+}
+
+// IsSoftCreatedFieldName checks and returns whether given field name is an automatic-filled created time.
+func (c *Core) IsSoftCreatedFieldName(fieldName string) bool {
 	if fieldName == "" {
 		return false
 	}
@@ -700,12 +775,23 @@ func (c *Core) isSoftCreatedFieldName(fieldName string) bool {
 		if utils.EqualFoldWithoutChars(fieldName, config.CreatedAt) {
 			return true
 		}
-		return gstr.InArray(append([]string{config.CreatedAt}, createdFiledNames...), fieldName)
+		return gstr.InArray(append([]string{config.CreatedAt}, createdFieldNames...), fieldName)
 	}
-	for _, v := range createdFiledNames {
+	for _, v := range createdFieldNames {
 		if utils.EqualFoldWithoutChars(fieldName, v) {
 			return true
 		}
 	}
 	return false
+}
+
+// FormatSqlBeforeExecuting formats the sql string and its arguments before executing.
+// The internal handleArguments function might be called twice during the SQL procedure,
+// but do not worry about it, it's safe and efficient.
+func (c *Core) FormatSqlBeforeExecuting(sql string, args []interface{}) (newSql string, newArgs []interface{}) {
+	// DO NOT do this as there may be multiple lines and comments in the sql.
+	// sql = gstr.Trim(sql)
+	// sql = gstr.Replace(sql, "\n", " ")
+	// sql, _ = gregex.ReplaceString(`\s{2,}`, ` `, sql)
+	return handleSliceAndStructArgsForSql(sql, args)
 }

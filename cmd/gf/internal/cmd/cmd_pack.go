@@ -1,3 +1,9 @@
+// Copyright GoFrame gf Author(https://goframe.org). All Rights Reserved.
+//
+// This Source Code Form is subject to the terms of the MIT License.
+// If a copy of the MIT was not distributed with this file,
+// You can obtain one at https://github.com/gogf/gf.
+
 package cmd
 
 import (
@@ -57,7 +63,7 @@ func init() {
 }
 
 type cPackInput struct {
-	g.Meta   `name:"pack"`
+	g.Meta   `name:"pack" config:"gfcli.pack"`
 	Src      string `name:"SRC" arg:"true" v:"required" brief:"{cPackSrcBrief}"`
 	Dst      string `name:"DST" arg:"true" v:"required" brief:"{cPackDstBrief}"`
 	Name     string `name:"name"     short:"n" brief:"{cPackNameBrief}"`

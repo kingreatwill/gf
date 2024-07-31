@@ -62,6 +62,23 @@ func TestIntSet_Basic(t *testing.T) {
 	})
 }
 
+func TestIntSet_Iterator_Deadlock(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		set := gset.NewIntSetFrom([]int{1, 2, 3, 4, 5}, true)
+		set.Iterator(func(k int) bool {
+			if k%2 == 0 {
+				set.Remove(k)
+			}
+			return true
+		})
+		t.Assert(set.Contains(1), true)
+		t.Assert(set.Contains(2), false)
+		t.Assert(set.Contains(3), true)
+		t.Assert(set.Contains(4), false)
+		t.Assert(set.Contains(5), true)
+	})
+}
+
 func TestIntSet_Iterator(t *testing.T) {
 	gtest.C(t, func(t *gtest.T) {
 		s := gset.NewIntSet()
@@ -94,8 +111,8 @@ func TestIntSet_LockFunc(t *testing.T) {
 		t.Assert(s.Size(), 2)
 		s.RLockFunc(func(m map[int]struct{}) {
 			t.Assert(m, map[int]struct{}{
-				3: struct{}{},
-				2: struct{}{},
+				3: {},
+				2: {},
 			})
 		})
 	})

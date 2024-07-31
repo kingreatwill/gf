@@ -16,7 +16,6 @@ import (
 	"github.com/gogf/gf/v2/internal/json"
 	"github.com/gogf/gf/v2/os/gstructs"
 	"github.com/gogf/gf/v2/text/gstr"
-	"github.com/gogf/gf/v2/util/gconv"
 )
 
 // Parameters is specified by OpenAPI/Swagger 3.0 standard.
@@ -30,15 +29,12 @@ type ParameterRef struct {
 func (oai *OpenApiV3) newParameterRefWithStructMethod(field gstructs.Field, path, method string) (*ParameterRef, error) {
 	var (
 		tagMap    = field.TagMap()
-		fieldName = field.Name()
+		fieldName = field.TagPriorityName()
 	)
-	for _, tagName := range gconv.StructTagPriority {
-		if tagValue := field.Tag(tagName); tagValue != "" {
-			fieldName = tagValue
-			break
-		}
+	fieldName = gstr.Split(gstr.Trim(fieldName), ",")[0]
+	if fieldName == "" {
+		fieldName = field.Name()
 	}
-	fieldName = gstr.SplitAndTrim(fieldName, ",")[0]
 	var parameter = &Parameter{
 		Name:        fieldName,
 		XExtensions: make(XExtensions),
