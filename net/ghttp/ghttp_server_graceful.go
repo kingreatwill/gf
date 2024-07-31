@@ -126,7 +126,7 @@ func (s *gracefulServer) CreateListenerTLS(certFile, keyFile string, tlsConfig .
 		config.NextProtos = []string{"http/1.1"}
 	}
 	var err error
-	if len(config.Certificates) == 0 {
+	if len(config.Certificates) == 0 && config.GetCertificate == nil {
 		config.Certificates = make([]tls.Certificate, 1)
 		if gres.Contains(certFile) {
 			config.Certificates[0], err = tls.X509KeyPair(
