@@ -144,15 +144,21 @@ func (ct *clientTracer) wroteRequest(info httptrace.WroteRequestInfo) {
 	if info.Err != nil {
 		ct.span.SetStatus(codes.Error, fmt.Sprintf(`%+v`, info.Err))
 	}
-
-	ct.span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
+	attrs := []attribute.KeyValue{
 		attribute.String(tracingEventHttpRequestHeaders, gconv.String(ct.headers)),
 		attribute.String(tracingEventHttpRequestBaggage, gtrace.GetBaggageMap(ct.Context).String()),
-		attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
+	}
+	encoding := gconv.String(ct.headers["Content-Encoding"])
+	if encoding == "" {
+		attrs = append(attrs, attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
 			string(ct.requestBody),
 			gtrace.MaxContentLogSize(),
 			"...",
-		)),
+		)))
+	}
+
+	ct.span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
+		attrs...,
 	))
 }
 
