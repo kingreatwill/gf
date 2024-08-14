@@ -83,14 +83,22 @@ func internalMiddlewareServerTracing(r *Request) {
 	reqBodyContentBytes, _ := ioutil.ReadAll(r.Body)
 	r.Body = utils.NewReadCloser(reqBodyContentBytes, false)
 
-	span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
+	attrs := []attribute.KeyValue{
 		attribute.String(tracingEventHttpRequestHeaders, gconv.String(httputil.HeaderToMap(r.Header))),
 		attribute.String(tracingEventHttpRequestBaggage, gtrace.GetBaggageMap(ctx).String()),
-		attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
+	}
+
+	encoding := gconv.String(r.GetHeader("Content-Encoding"))
+	if encoding == "" {
+		attrs = append(attrs, attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
 			string(reqBodyContentBytes),
 			gtrace.MaxContentLogSize(),
 			"...",
-		)),
+		)))
+	}
+
+	span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
+		attrs...,
 	))
 
 	// Continue executing.
