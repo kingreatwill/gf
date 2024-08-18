@@ -88,14 +88,14 @@ func internalMiddlewareServerTracing(r *Request) {
 		attribute.String(tracingEventHttpRequestBaggage, gtrace.GetBaggageMap(ctx).String()),
 	}
 
-	encoding := gconv.String(r.GetHeader("Content-Encoding"))
-	if encoding == "" {
-		attrs = append(attrs, attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
-			string(reqBodyContentBytes),
-			gtrace.MaxContentLogSize(),
-			"...",
-		)))
-	}
+	// encoding := gconv.String(r.GetHeader("Content-Encoding"))
+	// if encoding == "" {
+	// 	attrs = append(attrs, attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
+	// 		string(reqBodyContentBytes),
+	// 		gtrace.MaxContentLogSize(),
+	// 		"...",
+	// 	)))
+	// }
 
 	span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
 		attrs...,
