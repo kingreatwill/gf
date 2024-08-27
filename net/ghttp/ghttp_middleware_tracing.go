@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/gogf/gf/v2"
 	"github.com/gogf/gf/v2/internal/httputil"
+	"github.com/gogf/gf/v2/internal/tracing"
 	"github.com/gogf/gf/v2/internal/utils"
 	"github.com/gogf/gf/v2/net/gtrace"
 	"github.com/gogf/gf/v2/os/gctx"
@@ -59,10 +61,7 @@ func internalMiddlewareServerTracing(r *Request) {
 		)
 	)
 	ctx, span = tr.Start(
-		otel.GetTextMapPropagator().Extract(
-			ctx,
-			propagation.HeaderCarrier(r.Header),
-		),
+		getSpanContext(ctx, r.Header),
 		r.URL.String(),
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
@@ -115,4 +114,25 @@ func internalMiddlewareServerTracing(r *Request) {
 		attribute.String(tracingEventHttpResponseHeaders, gconv.String(httputil.HeaderToMap(r.Response.Header()))),
 		attribute.String(tracingEventHttpResponseBody, resBodyContent),
 	))
+}
+
+func getSpanContext(ctx context.Context, header http.Header) context.Context {
+	traceID := header.Get("MF-X-TRACE-ID")
+	if traceID == "" {
+		return otel.GetTextMapPropagator().Extract(
+			ctx,
+			propagation.HeaderCarrier(header),
+		)
+	}
+	generatedTraceID, err := trace.TraceIDFromHex(traceID)
+	if err != nil {
+		return otel.GetTextMapPropagator().Extract(
+			ctx,
+			propagation.HeaderCarrier(header),
+		)
+	}
+	return trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: generatedTraceID,
+		SpanID:  tracing.NewSpanID(),
+	}))
 }
