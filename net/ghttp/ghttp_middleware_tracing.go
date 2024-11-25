@@ -78,26 +78,25 @@ func internalMiddlewareServerTracing(r *Request) {
 		return
 	}
 
-	// Request content logging.
-	reqBodyContentBytes, _ := ioutil.ReadAll(r.Body)
-	r.Body = utils.NewReadCloser(reqBodyContentBytes, false)
-
-	attrs := []attribute.KeyValue{
+	reqAttrs := []attribute.KeyValue{
 		attribute.String(tracingEventHttpRequestHeaders, gconv.String(httputil.HeaderToMap(r.Header))),
 		attribute.String(tracingEventHttpRequestBaggage, gtrace.GetBaggageMap(ctx).String()),
 	}
 
-	// encoding := gconv.String(r.GetHeader("Content-Encoding"))
-	// if encoding == "" {
-	// 	attrs = append(attrs, attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
-	// 		string(reqBodyContentBytes),
-	// 		gtrace.MaxContentLogSize(),
-	// 		"...",
-	// 	)))
-	// }
+	reqEncoding := gconv.String(r.GetHeader("Content-Encoding"))
+	if reqEncoding == "" {
+		// Request content logging.
+		reqBodyContentBytes, _ := ioutil.ReadAll(r.Body)
+		r.Body = utils.NewReadCloser(reqBodyContentBytes, false)
+		reqAttrs = append(reqAttrs, attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
+			string(reqBodyContentBytes),
+			gtrace.MaxContentLogSize(),
+			"...",
+		)))
+	}
 
 	span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
-		attrs...,
+		reqAttrs...,
 	))
 
 	// Continue executing.
@@ -107,12 +106,21 @@ func internalMiddlewareServerTracing(r *Request) {
 	if err := r.GetError(); err != nil {
 		span.SetStatus(codes.Error, fmt.Sprintf(`%+v`, err))
 	}
-	// Response content logging.
-	var resBodyContent = gstr.StrLimit(r.Response.BufferString(), gtrace.MaxContentLogSize(), "...")
 
-	span.AddEvent(tracingEventHttpResponse, trace.WithAttributes(
+	respAttrs := []attribute.KeyValue{
 		attribute.String(tracingEventHttpResponseHeaders, gconv.String(httputil.HeaderToMap(r.Response.Header()))),
-		attribute.String(tracingEventHttpResponseBody, resBodyContent),
+	}
+	// Response content logging.
+	respEncoding := ""
+	if r.Response.Header() != nil {
+		respEncoding = gconv.String(r.Response.Header().Get("Content-Encoding"))
+	}
+	if respEncoding == "" {
+		var resBodyContent = gstr.StrLimit(r.Response.BufferString(), gtrace.MaxContentLogSize(), "...")
+		respAttrs = append(respAttrs, attribute.String(tracingEventHttpResponseBody, resBodyContent))
+	}
+	span.AddEvent(tracingEventHttpResponse, trace.WithAttributes(
+		respAttrs...,
 	))
 }
 
